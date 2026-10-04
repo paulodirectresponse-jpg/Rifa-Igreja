@@ -780,7 +780,7 @@ const server = createServer(async (req, res) => {
         reserved: reserved.size,
         available: 200 - sold.size - reserved.size,
         gross: sold.size * 20,
-        paymentMode: mpConfigured ? "mercadopago" : "demo",
+        paymentMode: checkoutConfigured ? "mercadopago" : "unavailable",
         testMode: mpTestMode,
         emailConfigured,
         paidNumberCount: new Set(
@@ -865,9 +865,9 @@ server.listen(port, process.env.HOST || "127.0.0.1", () => {
   console.log(`Painel administrativo: http://localhost:${port}/admin`);
   console.log("Senha administrativa configurada; valor omitido do log.");
   console.log(
-    mpConfigured
-      ? "Checkout do Mercado Pago habilitado."
-      : "Checkout em modo demonstração; configure credenciais do Mercado Pago e uma URL HTTPS pública para pagamentos de teste.",
+    checkoutConfigured
+      ? "Checkout incorporado do Mercado Pago habilitado."
+      : "Checkout indisponível; configure Access Token, Public Key e uma URL HTTPS pública.",
   );
   if (firstLiveInitialization)
     console.log(
