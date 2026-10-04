@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0c1422" />
+    <link rel="icon" href="/assets/catalunha-logo-icon.png" type="image/png" />
+    <meta
+      name="description"
+      content="Participe da rifa beneficente da Igreja Evangelística Ministério Catalunha e ajude na compra da bateria da igreja."
+    />
+    <title>Rifa beneficente · Igreja Ministério Catalunha</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="preview-notice" id="preview-notice" hidden>
+      PRÉVIA: use dados fictícios. Pagamentos e confirmações são simulações, sem
+      cobrança real.
+    </div>
+    <header class="topbar">
+      <a class="brand church-brand" href="/" aria-label="Igreja Evangelística Ministério Catalunha, início"
+        ><img class="church-wordmark" src="/assets/catalunha-logo-wordmark.png" alt="Igreja Evangelística Ministério Catalunha" /></a
+      >
+      <nav class="nav-links">
+        <a href="#premios">Prêmios</a><a href="#numeros">Números</a
+        ><a href="#como-funciona">Como funciona</a>
+      </nav>
+      <a class="my-numbers" href="#consulta"
+        ><span class="ticket-icon">▤</span> Meus números</a
+      >
+      <button
+        class="menu-button"
+        aria-label="Abrir menu"
+        aria-controls="mobile-menu"
+        aria-expanded="false"
+      >
+        <span></span><span></span>
+      </button>
+    </header>
+
+    <main>
+      <section class="hero shell">
+        <div class="hero-copy">
+          <div class="eyebrow">
+            <span class="live-dot"></span> RIFA BENEFICENTE DA IGREJA
+          </div>
+          <h1>Ajude a igreja a conquistar sua <em>bateria.</em></h1>
+          <p>
+            Participe da rifa da Igreja Evangelística Ministério Catalunha. Sua
+            contribuição ajuda na compra da bateria da igreja.
+          </p>
+          <div class="hero-actions">
+            <a class="button button-lime hero-cta" href="#numeros"
+              >Escolher meus números <span>↗</span></a
+            >
+            <div class="hero-trust">
+              <span class="live-dot" aria-hidden="true"></span>
+              <span><b id="hero-sold">0</b> números vendidos</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="prize-section shell" id="premios">
+        <div class="section-heading">
+          <div>
+            <div class="eyebrow">PRÊMIOS DA RIFA</div>
+            <h2>Participe e <em>concorra.</em></h2>
+          </div>
+          <p>Três prêmios para apoiar<br />uma causa da nossa comunidade.</p>
+        </div>
+        <div class="prize-grid">
+          <article class="prize-card pix-card pix-gold side-prize">
+            <div class="prize-rank">2º LUGAR</div>
+            <img class="prize-art cash-art cash-300" src="/assets/premio-pix-300.png" alt="Maço ilustrativo de notas para o prêmio de R$ 300" />
+            <div class="pix-copy">
+              <h3>R$ 300</h3>
+              <p>prêmio via Pix</p>
+            </div>
+          </article>
+          <article class="prize-card glove-prize center-prize">
+            <div class="prize-rank">1º LUGAR <span>PRÊMIO PRINCIPAL</span></div>
+            <img class="prize-art glove-art" src="/assets/premio-luva.png" alt="Luva profissional de goleiro preta com detalhes verde-limão" />
+            <div class="prize-content">
+              <h3>Luva profissional de goleiro</h3>
+              <p>Pista F900 <span>•</span> tamanho 10</p>
+            </div>
+          </article>
+          <article class="prize-card pix-card pix-silver side-prize">
+            <div class="prize-rank">3º LUGAR</div>
+            <img class="prize-art cash-art cash-100" src="/assets/premio-pix-100.png" alt="Maço ilustrativo de notas para o prêmio de R$ 100" />
+            <div class="pix-copy">
+              <h3>R$ 100</h3>
+              <p>prêmio via Pix</p>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="raffle-results shell" id="draw-results" hidden>
+        <div class="eyebrow">RESULTADO OFICIAL</div>
+        <h2>Números sorteados</h2>
+        <div class="raffle-winners" id="raffle-winners"></div>
+        <p id="draw-date" class="number-disclaimer"></p>
+      </section>
+
+      <section class="numbers-section" id="numeros">
+        <div class="shell numbers-shell">
+          <div class="section-heading numbers-heading">
+            <div>
+              <div class="eyebrow">SUA ESCOLHA, SUA CHANCE</div>
+              <h2>Escolha seus <em>números.</em></h2>
+            </div>
+            <div class="price-chip"><span>cada número</span><b>R$ 20</b></div>
+          </div>
+          <div class="sale-progress">
+            <div class="progress-label">
+              <span
+                ><i class="live-dot"></i> <b id="chosen-count">0</b> de 200
+                números vendidos ou reservados</span
+              ><span><b id="available-count">200</b> disponíveis</span>
+            </div>
+            <div class="progress-track"><i id="progress-fill"></i></div>
+          </div>
+          <p class="sales-closed-notice" id="sales-closed-notice" hidden>As vendas foram encerradas. Obrigado por apoiar a compra da bateria da igreja.</p>
+          <div class="number-tools">
+            <div class="filter-pills">
+              <button class="filter active" data-filter="all">
+                Todos <span id="count-all">200</span></button
+              ><button class="filter" data-filter="available">
+                Disponíveis <span id="count-available">200</span></button
+              ><button class="filter" data-filter="selected">
+                Selecionados <span id="count-selected">0</span>
+              </button>
+            </div>
+            <label class="search-number"
+              ><span>⌕</span
+              ><input
+                id="search-number"
+                inputmode="numeric"
+                placeholder="Buscar número"
+                aria-label="Buscar número"
+            /></label>
+          </div>
+          <div class="number-layout">
+            <div>
+              <div class="number-legend">
+                <span><i class="legend-dot available-dot"></i> Disponível</span
+                ><span><i class="legend-dot selected-dot"></i> Selecionado</span
+                ><span><i class="legend-dot reserved-dot"></i> Reservado</span
+                ><span><i class="legend-dot sold-dot"></i> Vendido</span>
+              </div>
+              <div
+                class="number-grid"
+                id="number-grid"
+                aria-label="Selecione seus números"
+              ></div>
+            </div>
+            <aside class="selection-card">
+              <div class="selection-top">
+                <div>
+                  <div class="eyebrow">SEU PEDIDO</div>
+                  <h3>Quase lá!</h3>
+                </div>
+                <span class="mini-ticket">▤</span>
+              </div>
+              <div class="selected-list" id="selected-list">
+                <p class="empty-selection">
+                  Toque nos números para<br />adicionar à sua seleção.
+                </p>
+              </div>
+              <div class="selection-total">
+                <span>Total</span><b id="selection-total">R$ 0,00</b>
+              </div>
+              <button
+                class="button button-lime continue-button"
+                id="continue-button"
+                disabled
+              >
+                Escolher meus números <span>→</span>
+              </button>
+              <div class="hold-note">
+                <span>◷</span> Seus números ficam reservados por 30 minutos
+                durante o pagamento.
+              </div>
+            </aside>
+          </div>
+          <p class="number-disclaimer">
+            A participação será confirmada após a identificação do pagamento.
+          </p>
+        </div>
+      </section>
+
+      <section class="how-section shell" id="como-funciona">
+        <div class="eyebrow">SIMPLES ASSIM</div>
+        <h2>Da escolha à <em>torcida.</em></h2>
+        <div class="steps">
+          <article>
+            <span>01</span>
+            <h3>Escolha seus números</h3>
+            <p>
+              Selecione quantos quiser entre os que ainda estão disponíveis.
+            </p>
+          </article>
+          <article>
+            <span>02</span>
+            <h3>Faça seu pagamento</h3>
+            <p>Confira seus dados e siga para o pagamento com segurança.</p>
+          </article>
+          <article>
+            <span>03</span>
+            <h3>Boa sorte!</h3>
+            <p>
+              Com pagamento confirmado, seus números ficam garantidos na rifa.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="receipt-lookup shell" id="consulta">
+        <div class="receipt-lookup-copy">
+          <div class="eyebrow">JÁ PARTICIPOU?</div>
+          <h2>Consulte seus <em>números.</em></h2>
+          <p>Informe o mesmo e-mail da compra. Enviaremos um link privado para consultar comprovantes confirmados.</p>
+        </div>
+        <form id="receipt-lookup-form" class="receipt-lookup-form">
+          <label for="receipt-email">E-mail usado na compra</label>
+          <div class="receipt-email-row"><input id="receipt-email" name="email" type="email" autocomplete="email" required placeholder="voce@email.com" /><button class="button button-lime" type="submit">Enviar link <span>→</span></button></div>
+          <p id="receipt-lookup-message" role="status"></p>
+        </form>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="shell footer-inner">
+        <a class="brand church-brand" href="/"
+          ><img class="church-wordmark" src="/assets/catalunha-logo-wordmark.png" alt="Igreja Evangelística Ministério Catalunha" /></a
+        >
+        <p>Rifa beneficente para a compra da bateria da igreja.</p>
+        <span>© 2026 Igreja Evangelística Ministério Catalunha</span>
+      </div>
+    </footer>
+
+    <dialog id="checkout-dialog" class="checkout-dialog">
+      <form method="dialog" class="modal-x">
+        <button aria-label="Fechar">×</button>
+      </form>
+      <div id="checkout-content"></div>
+    </dialog>
+    <div class="toast" id="toast" role="status"></div>
+    <script src="/app.js" defer></script>
+  </body>
+</html>

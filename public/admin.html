@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex,nofollow" />
+    <link rel="icon" href="/assets/catalunha-logo-icon.png" type="image/png" />
+    <title>Painel administrativo · Igreja Ministério Catalunha</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body class="admin-body">
+    <main class="admin-wrap" id="admin-root">
+      <section class="admin-login">
+        <a class="brand church-brand" href="/"
+          ><img class="church-wordmark" src="/assets/catalunha-logo-wordmark.png" alt="Igreja Evangelística Ministério Catalunha" /></a
+        >
+        <div class="eyebrow">ÁREA RESTRITA</div>
+        <h1>Acesso do<br /><em>administrador.</em></h1>
+        <p>Entre para acompanhar a arrecadação e administrar a rifa da igreja.</p>
+        <form id="admin-login-form">
+          <label
+            >Senha de administrador<input
+              name="password"
+              type="password"
+              autocomplete="current-password"
+              required
+              autofocus /></label
+          ><button class="button button-lime">
+            Entrar no painel <span>→</span>
+          </button>
+          <p class="form-error" id="login-error"></p>
+        </form>
+        <a class="back-link" href="/">← Voltar para a rifa</a>
+      </section>
+    </main>
+    <div class="toast" id="toast"></div>
+    <script src="/admin.js" defer></script>
+  </body>
+</html>
