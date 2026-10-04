@@ -271,7 +271,7 @@ async function createMercadoPagoPayment(order, formData, idempotencyKey) {
     payer,
     ...(method === "pix"
       ? { date_of_expiration: new Date(order.expiresAt).toISOString() }
-      : { token, installments }),
+      : { token, installments, three_d_secure_mode: "optional", capture: true, binary_mode: false }),
     ...(Number.isFinite(issuer) && issuer > 0 ? { issuer_id: issuer } : {}),
     ...(mpWebhookSecret ? { notification_url: `${publicBaseUrl}/api/webhooks/mercadopago` } : {}),
   };
