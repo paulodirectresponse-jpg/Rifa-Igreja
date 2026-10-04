@@ -27,7 +27,8 @@ const readJson = async (request) => {
 const cookie = (request, key) => request.headers.get("cookie")?.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${key}=`))?.slice(key.length + 1);
 const baseUrl = (env, request) => (env.PUBLIC_BASE_URL || new URL(request.url).origin).replace(/\/$/, "");
 const mpServerConfigured = (env) => Boolean(env.MERCADOPAGO_ACCESS_TOKEN && env.PUBLIC_BASE_URL?.startsWith("https://") && (env.MERCADOPAGO_TEST_MODE === "true" || env.MERCADOPAGO_WEBHOOK_SECRET));
-const checkoutConfigured = (env) => Boolean(mpServerConfigured(env) && env.MERCADOPAGO_PUBLIC_KEY);
+const publicKey = (env) => String(env.MERCADOPAGO_PUBLIC_KEY || "").trim();
+const checkoutConfigured = (env) => Boolean(mpServerConfigured(env) && publicKey(env));
 const paymentMode = (env) => !checkoutConfigured(env) ? "unavailable" : env.MERCADOPAGO_TEST_MODE === "true" ? "test" : "live";
 
 async function expireHolds(db, now) {
@@ -190,7 +191,7 @@ async function api(request, env) {
 
   if (request.method === "GET" && url.pathname === "/api/payment-config") {
     if (!checkoutConfigured(env)) return json({ error: "Pagamento seguro ainda não configurado." }, 503);
-    return json({ publicKey: env.MERCADOPAGO_PUBLIC_KEY, testMode: env.MERCADOPAGO_TEST_MODE === "true" });
+    return json({ publicKey: publicKey(env), testMode: env.MERCADOPAGO_TEST_MODE === "true" });
   }
 
   if (request.method === "GET" && url.pathname === "/api/state") {
@@ -262,10 +263,6 @@ async function api(request, env) {
 
   if (request.method === "POST" && url.pathname === "/api/demo/confirm") {
     return json({ error: "Confirmações simuladas estão desativadas neste site." }, 403);
-    const { id } = await readJson(request); const order = await getOrder(env.DB, id);
-    if (!order || order.status !== "pending" || order.expires_at <= now) return json({ error: "A reserva expirou. Escolha os números novamente." }, 410);
-    await env.DB.batch([env.DB.prepare("UPDATE raffle_numbers SET status='sold' WHERE order_id=? AND status='reserved'").bind(id), env.DB.prepare("UPDATE raffle_orders SET status='paid_demo',paid_at=? WHERE id=?").bind(now, id)]);
-    return json({ ok: true, receiptUrl: publicReceiptLink(env, request, id) });
   }
 
   if (request.method === "GET" && url.pathname.startsWith("/api/order-status/")) {
