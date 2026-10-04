@@ -118,7 +118,9 @@ async function createMercadoPagoPayment(env, request, order, formData, idempoten
     payment_method_id: method,
     external_reference: order.id,
     payer,
-    ...(method === "pix" ? { date_of_expiration: new Date(expiresAt).toISOString() } : { token, installments }),
+    ...(method === "pix"
+      ? { date_of_expiration: new Date(expiresAt).toISOString() }
+      : { token, installments, three_d_secure_mode: "optional", capture: true, binary_mode: false }),
     ...(Number.isFinite(issuer) && issuer > 0 ? { issuer_id: issuer } : {}),
     ...(env.MERCADOPAGO_WEBHOOK_SECRET ? { notification_url: `${baseUrl(env, request)}/api/webhooks/mercadopago` } : {}),
   };
@@ -249,8 +251,9 @@ async function api(request, env) {
       const payment = await createMercadoPagoPayment(env, request, order, formData, idempotencyKey);
       await settle(env.DB, order, payment, cfg.sales_closed);
       order = await getOrder(env.DB, order.id);
-      if (order?.status === "paid") await sendReceiptEmail(env, request, order).catch(() => {});
-      return json(paymentSummary(payment, order || { ...order, expires_at: order?.expires_at || now + 30 * 60_000 }), 201);
+      if (!order) throw new Error("Pedido não encontrado após criação do pagamento");
+      if (order.status === "paid") await sendReceiptEmail(env, request, order).catch(() => {});
+      return json(paymentSummary(payment, order), 201);
     } catch (error) {
       console.error("Payment creation failed", error?.message || error);
       return json({ error: "Não foi possível processar o pagamento. Confira os dados e tente novamente." }, 502);
