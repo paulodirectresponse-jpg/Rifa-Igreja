@@ -1,5 +1,3 @@
-PRAGMA foreign_keys = ON;
-
 CREATE TABLE IF NOT EXISTS raffle_settings (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   sales_closed INTEGER NOT NULL DEFAULT 0,
@@ -31,7 +29,7 @@ CREATE INDEX IF NOT EXISTS raffle_orders_email_idx ON raffle_orders(email, statu
 CREATE TABLE IF NOT EXISTS raffle_numbers (
   number INTEGER PRIMARY KEY CHECK (number BETWEEN 1 AND 200),
   status TEXT NOT NULL DEFAULT 'available' CHECK (status IN ('available', 'reserved', 'sold')),
-  order_id TEXT REFERENCES raffle_orders(id),
+  order_id TEXT,
   FOREIGN KEY (order_id) REFERENCES raffle_orders(id)
 );
 WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 200)
