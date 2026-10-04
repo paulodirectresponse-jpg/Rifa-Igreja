@@ -28,18 +28,20 @@ const adminPassword = process.env.ADMIN_PASSWORD?.trim();
 if (!adminPassword)
   throw new Error("Defina ADMIN_PASSWORD no .env antes de iniciar o servidor.");
 const mpToken = process.env.MERCADOPAGO_ACCESS_TOKEN;
+const mpPublicKey = process.env.MERCADOPAGO_PUBLIC_KEY?.trim();
 const mpWebhookSecret = process.env.MERCADOPAGO_WEBHOOK_SECRET;
 const mpTestMode = process.env.MERCADOPAGO_TEST_MODE === "true";
 const publicBaseUrl = process.env.PUBLIC_BASE_URL?.replace(/\/$/, "");
 const resendApiKey = process.env.RESEND_API_KEY;
 const receiptEmailFrom = process.env.RECEIPT_EMAIL_FROM;
-const mpConfigured = !!(
+const mpServerConfigured = !!(
   mpToken &&
   publicBaseUrl?.startsWith("https://") &&
   (mpTestMode || mpWebhookSecret)
 );
-const configuredPaymentMode = !mpConfigured
-  ? "demo"
+const checkoutConfigured = !!(mpServerConfigured && mpPublicKey);
+const configuredPaymentMode = !checkoutConfigured
+  ? "unavailable"
   : mpTestMode
     ? "test"
     : "live";
@@ -94,11 +96,11 @@ if (storedState) {
   liveInitialized = storedState.liveInitialized === true;
   salesClosed = storedState.salesClosed === true;
   drawResult = storedState.drawResult || null;
-  if (mpConfigured && !liveInitialized) {
+  if (mpServerConfigured && !liveInitialized) {
     liveInitialized = true;
     firstLiveInitialization = true;
   } else if (
-    mpConfigured &&
+    mpServerConfigured &&
     storedState.paymentMode === "test" &&
     configuredPaymentMode === "live"
   ) {
@@ -106,16 +108,16 @@ if (storedState) {
     firstLiveInitialization = true;
   } else {
     if (
-      mpConfigured &&
+      mpServerConfigured &&
       configuredPaymentMode === "test" &&
       storedState.paymentMode === "live"
     )
       throw new Error(
         "A rifa já está em produção. Não é seguro voltar o ambiente para credenciais de teste.",
       );
-    if (liveInitialized && !mpConfigured) {
+    if (liveInitialized && !mpServerConfigured) {
       throw new Error(
-        "Esta rifa já foi preparada para pagamentos reais. Restaure as configurações do Mercado Pago no .env; o modo de demonstração foi desativado para proteger as vendas.",
+        "Esta rifa já foi preparada para pagamentos reais. Restaure as configurações privadas do Mercado Pago no .env.",
       );
     }
     for (const number of storedState.sold)
@@ -135,7 +137,7 @@ if (storedState) {
       for (const number of order.numbers) reserved.add(number);
     }
   }
-} else if (mpConfigured) {
+} else if (mpServerConfigured) {
   liveInitialized = true;
   firstLiveInitialization = true;
 }
@@ -219,70 +221,77 @@ async function getMercadoPagoPayment(paymentId) {
     throw new Error(`Mercado Pago respondeu ${response.status}`);
   return response.json();
 }
-async function createMercadoPagoPreference(hold, method) {
-  const fullName = hold.name.trim().split(/\s+/);
-  const digits = hold.phone.replace(/\D/g, "");
-  const payer = {
-    email: hold.email,
-    name: fullName[0],
-    surname: fullName.slice(1).join(" ") || undefined,
+function paymentSummary(payment, order) {
+  const pix = payment.point_of_interaction?.transaction_data;
+  return {
+    paymentId: String(payment.id || ""),
+    status: String(payment.status || "pending"),
+    statusDetail: String(payment.status_detail || ""),
+    expiresAt: order.expiresAt,
+    threeDsInfo: payment.three_ds_info
+      ? {
+          externalResourceURL: payment.three_ds_info.external_resource_url || "",
+          creq: payment.three_ds_info.creq || "",
+        }
+      : null,
+    pix: pix
+      ? { qrCode: pix.qr_code || "", qrCodeBase64: pix.qr_code_base64 || "" }
+      : null,
   };
-  if (digits.length >= 10)
-    payer.phone = {
-      area_code: digits.slice(0, 2),
-      number: Number(digits.slice(2)),
-    };
-  const excluded =
-    method === "pix"
-      ? ["credit_card", "debit_card", "prepaid_card", "ticket"]
-      : ["bank_transfer", "ticket"];
-  const expiry = new Date(hold.expiresAt).toISOString();
-  const base = `${publicBaseUrl}/`;
-  const payload = {
-    items: hold.numbers.map((number) => ({
-      id: String(number),
-      title: `Rifa beneficente · Igreja Ministério Catalunha · nº ${String(number).padStart(3, "0")}`,
-      quantity: 1,
-      currency_id: "BRL",
-      unit_price: 20,
-    })),
-    payer,
-    payment_methods: { excluded_payment_types: excluded.map((id) => ({ id })) },
-    external_reference: hold.id,
-    ...(mpWebhookSecret
-      ? { notification_url: `${publicBaseUrl}/api/webhooks/mercadopago` }
-      : {}),
-    back_urls: {
-      success: `${base}?payment=return&order_id=${hold.id}`,
-      pending: `${base}?payment=return&order_id=${hold.id}`,
-      failure: `${base}?payment=return&order_id=${hold.id}`,
-    },
-    auto_return: "approved",
-    expires: true,
-    expiration_date_from: new Date().toISOString(),
-    expiration_date_to: expiry,
-  };
-  const response = await fetch(
-    "https://api.mercadopago.com/checkout/preferences",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${mpToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    },
-  );
-  const preference = await response.json();
-  if (!response.ok || !preference.id)
-    throw new Error(
-      preference.message || `Mercado Pago respondeu ${response.status}`,
-    );
-  hold.preferenceId = preference.id;
-  return process.env.MERCADOPAGO_TEST_MODE === "true"
-    ? preference.sandbox_init_point
-    : preference.init_point;
 }
+
+async function createMercadoPagoPayment(order, formData, idempotencyKey) {
+  const method = String(formData?.payment_method_id || "").trim();
+  const token = String(formData?.token || "").trim();
+  const installments = Number(formData?.installments || 1);
+  const issuer = formData?.issuer_id == null ? null : Number(formData.issuer_id);
+  const identification = formData?.payer?.identification || {};
+  const identificationType = String(identification.type || "").trim();
+  const identificationNumber = String(identification.number || "").replace(/\D/g, "");
+  if (!/^[a-z0-9_-]{2,40}$/i.test(method)) throw new Error("Meio de pagamento inválido");
+  if (!identificationType || !identificationNumber) throw new Error("Documento do pagador não informado");
+  if (method !== "pix" && (!token || !Number.isInteger(installments) || installments < 1 || installments > 24))
+    throw new Error("Dados do cartão incompletos");
+
+  if (method === "pix") order.expiresAt = Date.now() + 30 * 60 * 1000;
+  const fullName = order.name.trim().split(/\s+/);
+  const digits = order.phone.replace(/\D/g, "");
+  const payer = {
+    email: order.email,
+    first_name: fullName[0],
+    last_name: fullName.slice(1).join(" ") || undefined,
+    identification: { type: identificationType, number: identificationNumber },
+    ...(digits.length >= 10 ? { phone: { area_code: digits.slice(0, 2), number: digits.slice(2) } } : {}),
+  };
+  const payload = {
+    transaction_amount: Number(order.amount),
+    description: `Rifa beneficente · Igreja Ministério Catalunha · ${order.numbers.length} número(s)`,
+    payment_method_id: method,
+    external_reference: order.id,
+    payer,
+    ...(method === "pix"
+      ? { date_of_expiration: new Date(order.expiresAt).toISOString() }
+      : { token, installments }),
+    ...(Number.isFinite(issuer) && issuer > 0 ? { issuer_id: issuer } : {}),
+    ...(mpWebhookSecret ? { notification_url: `${publicBaseUrl}/api/webhooks/mercadopago` } : {}),
+  };
+  const response = await fetch("https://api.mercadopago.com/v1/payments", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${mpToken}`,
+      "Content-Type": "application/json",
+      "X-Idempotency-Key": idempotencyKey,
+    },
+    body: JSON.stringify(payload),
+  });
+  const payment = await response.json();
+  if (!response.ok || !payment.id)
+    throw new Error(payment.message || `Mercado Pago respondeu ${response.status}`);
+  if (payment.status !== "rejected") order.paymentId = String(payment.id);
+  saveState();
+  return payment;
+}
+
 function settleApprovedPayment(order, payment) {
   if (payment.status !== "approved") return;
   if (order.status !== "pending") {
@@ -385,6 +394,11 @@ const server = createServer(async (req, res) => {
   try {
     if (req.method === "GET" && url.pathname === "/healthz")
       return json(res, 200, { ok: true });
+    if (req.method === "GET" && url.pathname === "/api/payment-config") {
+      if (!checkoutConfigured)
+        return json(res, 503, { error: "Pagamento seguro ainda não configurado." });
+      return json(res, 200, { publicKey: mpPublicKey, testMode: mpTestMode });
+    }
     if (req.method === "GET" && url.pathname === "/api/state") {
       const numbers = Array.from({ length: 200 }, (_, i) => ({
         number: i + 1,
@@ -401,17 +415,19 @@ const server = createServer(async (req, res) => {
         sold: sold.size,
         reserved: reserved.size,
         available: 200 - sold.size - reserved.size,
-        paymentMode: mpConfigured ? configuredPaymentMode : "demo",
+        paymentMode: checkoutConfigured ? configuredPaymentMode : "unavailable",
         salesOpen: !salesClosed,
         drawResult,
       });
     }
     if (req.method === "POST" && url.pathname === "/api/hold") {
+      if (!checkoutConfigured)
+        return json(res, 503, { error: "O pagamento ainda está sendo configurado. Tente novamente mais tarde." });
       if (salesClosed)
         return json(res, 409, {
           error: "As vendas foram encerradas para a realização do sorteio.",
         });
-      const { numbers, name, email, phone, method } = await readBody(req);
+      const { numbers, name, email, phone } = await readBody(req);
       if (
         !Array.isArray(numbers) ||
         !numbers.length ||
@@ -446,7 +462,7 @@ const server = createServer(async (req, res) => {
         name: name.trim(),
         email: email.trim(),
         phone: phone.trim(),
-        testPayment: mpConfigured && mpTestMode,
+        testPayment: checkoutConfigured && mpTestMode,
         createdAt: Date.now(),
         expiresAt: Date.now() + 30 * 60 * 1000,
         status: "pending",
@@ -456,43 +472,54 @@ const server = createServer(async (req, res) => {
       holds.set(id, hold);
       orders.unshift(hold);
       saveState();
-      if (mpConfigured) {
-        try {
-          hold.checkoutUrl = await createMercadoPagoPreference(
-            hold,
-            method === "pix" ? "pix" : "card",
-          );
-          if (!hold.checkoutUrl)
-            throw new Error("Mercado Pago não retornou um link de pagamento.");
-          return json(res, 201, {
-            id,
-            expiresAt: hold.expiresAt,
-            amount: hold.amount,
-            numbers: hold.numbers,
-            checkoutUrl: hold.checkoutUrl,
-            paymentMode: "mercadopago",
-          });
-        } catch {
-          for (const n of hold.numbers) reserved.delete(n);
-          holds.delete(id);
-          hold.status = "checkout_error";
-          saveState();
-          return json(res, 502, {
-            error:
-              "O Mercado Pago não conseguiu criar o pagamento. Tente novamente.",
-          });
-        }
-      }
       return json(res, 201, {
         id,
         expiresAt: hold.expiresAt,
         amount: hold.amount,
         numbers: hold.numbers,
-        paymentMode: "demo",
+        paymentMode: "mercadopago",
       });
     }
+    if (req.method === "POST" && url.pathname === "/api/payments") {
+      if (!checkoutConfigured)
+        return json(res, 503, { error: "Pagamento seguro ainda não configurado." });
+      const { orderId, formData, idempotencyKey } = await readBody(req);
+      if (!/^[a-f0-9]{32}$/i.test(orderId || "") || !/^[0-9a-f-]{16,64}$/i.test(idempotencyKey || ""))
+        return json(res, 400, { error: "Solicitação de pagamento inválida." });
+      const order = orders.find((item) => item.id === orderId);
+      if (!order)
+        return json(res, 404, { error: "Pedido não encontrado." });
+      if (order.status !== "pending" || order.expiresAt <= Date.now())
+        return json(res, 410, { error: "A reserva expirou. Escolha os números novamente." });
+      if (salesClosed)
+        return json(res, 409, { error: "As vendas foram encerradas para a realização do sorteio." });
+      if (order.numbers.some((n) => !reserved.has(n)))
+        return json(res, 409, { error: "A reserva não está mais disponível." });
+
+      if (/^\d{1,30}$/.test(order.paymentId || "")) {
+        try {
+          const existing = await getMercadoPagoPayment(order.paymentId);
+          if (["approved", "pending", "in_process", "authorized"].includes(existing.status)) {
+            settleApprovedPayment(order, existing);
+            return json(res, 200, paymentSummary(existing, order));
+          }
+        } catch {}
+      }
+
+      try {
+        const payment = await createMercadoPagoPayment(order, formData, idempotencyKey);
+        settleApprovedPayment(order, payment);
+        if (order.status === "paid") {
+          try { await sendReceiptEmail(order); } catch {}
+        }
+        return json(res, 201, paymentSummary(payment, order));
+      } catch (error) {
+        console.error("Payment creation failed", error?.message || error);
+        return json(res, 502, { error: "Não foi possível processar o pagamento. Confira os dados e tente novamente." });
+      }
+    }
     if (req.method === "POST" && url.pathname === "/api/demo/confirm") {
-      if (mpConfigured)
+      if (mpServerConfigured)
         return json(res, 403, {
           error: "Confirmações simuladas estão desativadas.",
         });
@@ -518,9 +545,12 @@ const server = createServer(async (req, res) => {
       );
       const order = orders.find((item) => item.id === id);
       if (!order) return json(res, 404, { error: "Pedido não encontrado." });
-      const paymentId = url.searchParams.get("payment_id");
+      const requestedPaymentId = url.searchParams.get("payment_id");
+      const paymentId = /^\d{1,30}$/.test(requestedPaymentId || "")
+        ? requestedPaymentId
+        : order.paymentId;
       if (
-        mpConfigured &&
+        mpServerConfigured &&
         order.status === "pending" &&
         /^\d{1,30}$/.test(paymentId || "")
       ) {
@@ -540,6 +570,7 @@ const server = createServer(async (req, res) => {
       return json(res, 200, {
         status: order.status,
         expiresAt: order.expiresAt,
+        paymentId: order.paymentId || null,
       });
     }
     if (req.method === "GET" && url.pathname.startsWith("/api/receipt/")) {
@@ -597,7 +628,7 @@ const server = createServer(async (req, res) => {
       });
     }
     if (req.method === "POST" && url.pathname === "/api/webhooks/mercadopago") {
-      if (!mpConfigured || !mpWebhookSecret)
+      if (!mpServerConfigured || !mpWebhookSecret)
         return json(res, 503, {
           error: "Webhooks do Mercado Pago não configurados.",
         });
