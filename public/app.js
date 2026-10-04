@@ -350,15 +350,19 @@ async function showEmbeddedPayment(hold) {
             const data = await response.json();
             if (!response.ok) throw new Error(data.error || "Não foi possível processar o pagamento.");
             if (data.expiresAt) hold.expiresAt = data.expiresAt;
-            if (data.status === "approved") {
-              const confirmed = await syncOrderPayment(hold.id, data.paymentId);
-              if (confirmed) {
-                resolve();
-                return;
-              }
-            }
-            await showPaymentStatus(hold, data);
             resolve();
+            setTimeout(async () => {
+              try {
+                if (data.status === "approved") {
+                  const confirmed = await syncOrderPayment(hold.id, data.paymentId);
+                  if (confirmed) return;
+                }
+                await showPaymentStatus(hold, data);
+              } catch (transitionError) {
+                console.error("Payment result transition", transitionError);
+                notify("O pagamento foi enviado, mas não foi possível atualizar a tela. A confirmação continuará sendo verificada.");
+              }
+            }, 0);
           } catch (err) {
             if (error) error.textContent = err.message || "Não foi possível processar o pagamento.";
             reject(err);
