@@ -26,8 +26,10 @@ const readJson = async (request) => {
 };
 const cookie = (request, key) => request.headers.get("cookie")?.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${key}=`))?.slice(key.length + 1);
 const baseUrl = (env, request) => (env.PUBLIC_BASE_URL || new URL(request.url).origin).replace(/\/$/, "");
-const mpConfigured = (env) => Boolean(env.MERCADOPAGO_ACCESS_TOKEN && env.PUBLIC_BASE_URL?.startsWith("https://") && (env.MERCADOPAGO_TEST_MODE === "true" || env.MERCADOPAGO_WEBHOOK_SECRET));
-const paymentMode = (env) => !mpConfigured(env) ? "unavailable" : env.MERCADOPAGO_TEST_MODE === "true" ? "test" : "live";
+const mpServerConfigured = (env) => Boolean(env.MERCADOPAGO_ACCESS_TOKEN && env.PUBLIC_BASE_URL?.startsWith("https://") && (env.MERCADOPAGO_TEST_MODE === "true" || env.MERCADOPAGO_WEBHOOK_SECRET));
+const publicKey = (env) => String(env.MERCADOPAGO_PUBLIC_KEY || "").trim();
+const checkoutConfigured = (env) => Boolean(mpServerConfigured(env) && publicKey(env));
+const paymentMode = (env) => !checkoutConfigured(env) ? "unavailable" : env.MERCADOPAGO_TEST_MODE === "true" ? "test" : "live";
 
 async function expireHolds(db, now) {
   await db.batch([
@@ -59,28 +61,96 @@ async function mpPayment(env, id) {
   return response.json();
 }
 
-async function createPreference(env, request, order, method) {
+const paymentSummary = (payment, order) => {
+  const pix = payment.point_of_interaction?.transaction_data;
+  return {
+    paymentId: String(payment.id || ""),
+    status: String(payment.status || "pending"),
+    statusDetail: String(payment.status_detail || ""),
+    expiresAt: order.expires_at,
+    threeDsInfo: payment.three_ds_info
+      ? {
+          externalResourceURL: payment.three_ds_info.external_resource_url || "",
+          creq: payment.three_ds_info.creq || "",
+        }
+      : null,
+    pix: pix
+      ? {
+          qrCode: pix.qr_code || "",
+          qrCodeBase64: pix.qr_code_base64 || "",
+        }
+      : null,
+  };
+};
+
+async function createMercadoPagoPayment(env, request, order, formData, idempotencyKey) {
+  const method = String(formData?.payment_method_id || "").trim();
+  const token = String(formData?.token || "").trim();
+  const installments = Number(formData?.installments || 1);
+  const issuer = formData?.issuer_id == null ? null : Number(formData.issuer_id);
+  const identification = formData?.payer?.identification || {};
+  const identificationType = String(identification.type || "").trim();
+  const identificationNumber = String(identification.number || "").replace(/\D/g, "");
+  if (!/^[a-z0-9_-]{2,40}$/i.test(method)) throw new Error("Meio de pagamento inválido");
+  if (!identificationType || !identificationNumber) throw new Error("Documento do pagador não informado");
+  if (method !== "pix" && (!token || !Number.isInteger(installments) || installments < 1 || installments > 24)) {
+    throw new Error("Dados do cartão incompletos");
+  }
+
+  let expiresAt = order.expires_at;
+  if (method === "pix") {
+    expiresAt = Date.now() + 30 * 60_000;
+    await env.DB.prepare("UPDATE raffle_orders SET expires_at=? WHERE id=? AND status='pending'").bind(expiresAt, order.id).run();
+    order.expires_at = expiresAt;
+  }
+
   const parts = order.name.trim().split(/\s+/);
   const digits = order.phone.replace(/\D/g, "");
-  const payload = {
-    items: order.numbers.map((number) => ({ id: String(number), title: `Rifa beneficente · Igreja Ministério Catalunha · nº ${String(number).padStart(3, "0")}`, quantity: 1, currency_id: "BRL", unit_price: 20 })),
-    payer: { email: order.email, name: parts[0], surname: parts.slice(1).join(" ") || undefined, ...(digits.length >= 10 ? { phone: { area_code: digits.slice(0, 2), number: Number(digits.slice(2)) } } : {}) },
-    payment_methods: { excluded_payment_types: (method === "pix" ? ["credit_card", "debit_card", "prepaid_card", "ticket"] : ["bank_transfer", "ticket"]).map((id) => ({ id })) },
-    external_reference: order.id,
-    notification_url: env.MERCADOPAGO_WEBHOOK_SECRET ? `${baseUrl(env, request)}/api/webhooks/mercadopago` : undefined,
-    back_urls: Object.fromEntries(["success", "pending", "failure"].map((key) => [key, `${baseUrl(env, request)}/?payment=return&order_id=${order.id}`])),
-    auto_return: "approved", expires: true, expiration_date_from: new Date().toISOString(), expiration_date_to: new Date(order.expires_at).toISOString(),
+  const payer = {
+    email: order.email,
+    first_name: parts[0],
+    last_name: parts.slice(1).join(" ") || undefined,
+    identification: { type: identificationType, number: identificationNumber },
+    ...(digits.length >= 10 ? { phone: { area_code: digits.slice(0, 2), number: digits.slice(2) } } : {}),
   };
-  const response = await fetch("https://api.mercadopago.com/checkout/preferences", { method: "POST", headers: { authorization: `Bearer ${env.MERCADOPAGO_ACCESS_TOKEN}`, "content-type": "application/json" }, body: JSON.stringify(payload) });
-  const result = await response.json();
-  if (!response.ok || !result.id) throw new Error("Mercado Pago não criou o checkout");
-  await env.DB.prepare("UPDATE raffle_orders SET preference_id=? WHERE id=?").bind(result.id, order.id).run();
-  return env.MERCADOPAGO_TEST_MODE === "true" ? result.sandbox_init_point : result.init_point;
+  const payload = {
+    transaction_amount: Number(order.amount),
+    description: `Rifa beneficente · Igreja Ministério Catalunha · ${order.numbers.length} número(s)`,
+    payment_method_id: method,
+    external_reference: order.id,
+    payer,
+    ...(method === "pix"
+      ? { date_of_expiration: new Date(expiresAt).toISOString() }
+      : { token, installments, three_d_secure_mode: "optional", capture: true, binary_mode: false }),
+    ...(Number.isFinite(issuer) && issuer > 0 ? { issuer_id: issuer } : {}),
+    ...(env.MERCADOPAGO_WEBHOOK_SECRET ? { notification_url: `${baseUrl(env, request)}/api/webhooks/mercadopago` } : {}),
+  };
+  const response = await fetch("https://api.mercadopago.com/v1/payments", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${env.MERCADOPAGO_ACCESS_TOKEN}`,
+      "content-type": "application/json",
+      "x-idempotency-key": idempotencyKey,
+    },
+    body: JSON.stringify(payload),
+  });
+  const payment = await response.json();
+  if (!response.ok || !payment.id) {
+    console.error("Mercado Pago payment error", response.status, payment?.error || payment?.message || "unknown");
+    throw new Error("Mercado Pago não criou o pagamento");
+  }
+  if (payment.status !== "rejected") {
+    await env.DB.prepare("UPDATE raffle_orders SET payment_id=?, expires_at=? WHERE id=? AND status='pending'").bind(String(payment.id), expiresAt, order.id).run();
+  }
+  return payment;
 }
 
 async function settle(db, order, payment, salesClosed) {
   if (!order || payment.status !== "approved") return;
-  if (order.status !== "pending") return;
+  if (order.status !== "pending") {
+    if (order.status !== "paid") await db.prepare("UPDATE raffle_orders SET status='late_payment_review' WHERE id=?").bind(order.id).run();
+    return;
+  }
   const approvedAt = Date.parse(payment.date_approved || payment.date_created || "");
   if (payment.external_reference !== order.id || payment.currency_id !== "BRL" || Math.round(Number(payment.transaction_amount) * 100) !== Math.round(order.amount * 100)) {
     await db.prepare("UPDATE raffle_orders SET status='payment_review' WHERE id=? AND status='pending'").bind(order.id).run(); return;
@@ -119,6 +189,11 @@ async function api(request, env) {
   await expireHolds(env.DB, now);
   const settings = () => env.DB.prepare("SELECT * FROM raffle_settings WHERE id=1").first();
 
+  if (request.method === "GET" && url.pathname === "/api/payment-config") {
+    if (!checkoutConfigured(env)) return json({ error: "Pagamento seguro ainda não configurado." }, 503);
+    return json({ publicKey: publicKey(env), testMode: env.MERCADOPAGO_TEST_MODE === "true" });
+  }
+
   if (request.method === "GET" && url.pathname === "/api/state") {
     const [rows, cfg] = await Promise.all([env.DB.prepare("SELECT number,status FROM raffle_numbers ORDER BY number").all(), settings()]);
     const numbers = rows.results;
@@ -128,10 +203,10 @@ async function api(request, env) {
   }
 
   if (request.method === "POST" && url.pathname === "/api/hold") {
-    if (!mpConfigured(env)) return json({ error: "O pagamento ainda está sendo configurado. Tente novamente mais tarde." }, 503);
+    if (!checkoutConfigured(env)) return json({ error: "O pagamento ainda está sendo configurado. Tente novamente mais tarde." }, 503);
     const cfg = await settings();
     if (cfg.sales_closed) return json({ error: "As vendas foram encerradas para a realização do sorteio." }, 409);
-    const { numbers, name, email, phone, method } = await readJson(request);
+    const { numbers, name, email, phone } = await readJson(request);
     if (!Array.isArray(numbers) || !numbers.length || numbers.length > 20 || !name?.trim() || !/^\S+@\S+\.\S+$/.test(email || "") || !phone?.trim()) return json({ error: "Confira seus dados e selecione de 1 a 20 números." }, 400);
     const unique = [...new Set(numbers.map(Number))];
     if (unique.length !== numbers.length || unique.some((n) => !Number.isInteger(n) || n < 1 || n > 200)) return json({ error: "Selecione números válidos e sem repetição." }, 400);
@@ -145,35 +220,60 @@ async function api(request, env) {
       await env.DB.batch([env.DB.prepare("UPDATE raffle_numbers SET status='available',order_id=NULL WHERE order_id=?").bind(id), env.DB.prepare("DELETE FROM raffle_orders WHERE id=?").bind(id)]);
       return json({ error: "Um ou mais números não estão mais disponíveis. Atualize a seleção." }, 409);
     }
-    if (mpConfigured(env)) {
-      try {
-        const checkoutUrl = await createPreference(env, request, { ...order, expires_at: expiresAt }, method === "pix" ? "pix" : "card");
-        if (!checkoutUrl) throw new Error("Link de checkout ausente");
-        return json({ id, expiresAt, amount: order.amount, numbers: unique, checkoutUrl, paymentMode: "mercadopago" }, 201);
-      } catch {
-        await env.DB.batch([env.DB.prepare("UPDATE raffle_numbers SET status='available',order_id=NULL WHERE order_id=?").bind(id), env.DB.prepare("UPDATE raffle_orders SET status='checkout_error' WHERE id=?").bind(id)]);
-        return json({ error: "O Mercado Pago não conseguiu criar o pagamento. Tente novamente." }, 502);
-      }
+    return json({ id, expiresAt, amount: order.amount, numbers: unique, paymentMode: "mercadopago" }, 201);
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/payments") {
+    if (!checkoutConfigured(env)) return json({ error: "Pagamento seguro ainda não configurado." }, 503);
+    const { orderId, formData, idempotencyKey } = await readJson(request);
+    if (!/^[a-f0-9]{32}$/i.test(orderId || "") || !/^[0-9a-f-]{16,64}$/i.test(idempotencyKey || "")) {
+      return json({ error: "Solicitação de pagamento inválida." }, 400);
     }
-    return json({ id, expiresAt, amount: order.amount, numbers: unique, paymentMode: "demo" }, 201);
+    let order = await getOrder(env.DB, orderId);
+    if (!order) return json({ error: "Pedido não encontrado." }, 404);
+    if (order.status !== "pending" || order.expires_at <= now) return json({ error: "A reserva expirou. Escolha os números novamente." }, 410);
+    const cfg = await settings();
+    if (cfg.sales_closed) return json({ error: "As vendas foram encerradas para a realização do sorteio." }, 409);
+    const owned = await env.DB.prepare("SELECT COUNT(*) AS count FROM raffle_numbers WHERE order_id=? AND status='reserved'").bind(order.id).first();
+    if (owned.count !== order.numbers.length) return json({ error: "A reserva não está mais disponível." }, 409);
+
+    if (/^\d{1,30}$/.test(order.payment_id || "")) {
+      try {
+        const existing = await mpPayment(env, order.payment_id);
+        if (["approved", "pending", "in_process", "authorized"].includes(existing.status)) {
+          await settle(env.DB, order, existing, cfg.sales_closed);
+          order = await getOrder(env.DB, order.id);
+          return json(paymentSummary(existing, order), 200);
+        }
+      } catch {}
+    }
+
+    try {
+      const payment = await createMercadoPagoPayment(env, request, order, formData, idempotencyKey);
+      await settle(env.DB, order, payment, cfg.sales_closed);
+      order = await getOrder(env.DB, order.id);
+      if (!order) throw new Error("Pedido não encontrado após criação do pagamento");
+      if (order.status === "paid") await sendReceiptEmail(env, request, order).catch(() => {});
+      return json(paymentSummary(payment, order), 201);
+    } catch (error) {
+      console.error("Payment creation failed", error?.message || error);
+      return json({ error: "Não foi possível processar o pagamento. Confira os dados e tente novamente." }, 502);
+    }
   }
 
   if (request.method === "POST" && url.pathname === "/api/demo/confirm") {
     return json({ error: "Confirmações simuladas estão desativadas neste site." }, 403);
-    const { id } = await readJson(request); const order = await getOrder(env.DB, id);
-    if (!order || order.status !== "pending" || order.expires_at <= now) return json({ error: "A reserva expirou. Escolha os números novamente." }, 410);
-    await env.DB.batch([env.DB.prepare("UPDATE raffle_numbers SET status='sold' WHERE order_id=? AND status='reserved'").bind(id), env.DB.prepare("UPDATE raffle_orders SET status='paid_demo',paid_at=? WHERE id=?").bind(now, id)]);
-    return json({ ok: true, receiptUrl: publicReceiptLink(env, request, id) });
   }
 
   if (request.method === "GET" && url.pathname.startsWith("/api/order-status/")) {
     const id = decodeURIComponent(url.pathname.slice("/api/order-status/".length)); let order = await getOrder(env.DB, id);
     if (!order) return json({ error: "Pedido não encontrado." }, 404);
-    const paymentId = url.searchParams.get("payment_id");
-    if (mpConfigured(env) && order.status === "pending" && /^\d{1,30}$/.test(paymentId || "")) {
+    const requestedPaymentId = url.searchParams.get("payment_id");
+    const paymentId = /^\d{1,30}$/.test(requestedPaymentId || "") ? requestedPaymentId : order.payment_id;
+    if (mpServerConfigured(env) && order.status === "pending" && /^\d{1,30}$/.test(paymentId || "")) {
       try { const payment = await mpPayment(env, paymentId); if (payment.external_reference === id) { const cfg = await settings(); await settle(env.DB, order, payment, cfg.sales_closed); order = await getOrder(env.DB, id); if (order?.status === "paid") await sendReceiptEmail(env, request, order); } } catch {}
     }
-    return json({ status: order.status, expiresAt: order.expires_at });
+    return json({ status: order.status, expiresAt: order.expires_at, paymentId: order.payment_id || null });
   }
 
   if (request.method === "GET" && url.pathname.startsWith("/api/receipt/")) {
@@ -200,7 +300,7 @@ async function api(request, env) {
   }
 
   if (request.method === "POST" && url.pathname === "/api/webhooks/mercadopago") {
-    if (!mpConfigured(env) || !env.MERCADOPAGO_WEBHOOK_SECRET) return json({ error: "Webhooks do Mercado Pago não configurados." }, 503);
+    if (!mpServerConfigured(env) || !env.MERCADOPAGO_WEBHOOK_SECRET) return json({ error: "Webhooks do Mercado Pago não configurados." }, 503);
     const body = await readJson(request); const dataId = url.searchParams.get("data.id") || body.data?.id;
     if (!await verifySignature(env.MERCADOPAGO_WEBHOOK_SECRET, request.headers.get("x-signature"), request.headers.get("x-request-id"), String(dataId || ""))) return json({ error: "Assinatura inválida." }, 401);
     if (body.type !== "payment" || !dataId) return json({ ok: true });
@@ -243,7 +343,7 @@ async function api(request, env) {
   if (request.method === "GET" && url.pathname === "/api/admin/overview") {
     const [cfg, counts, orders] = await Promise.all([settings(), env.DB.prepare("SELECT status,COUNT(*) AS count FROM raffle_numbers GROUP BY status").all(), env.DB.prepare("SELECT id,name,email,phone,numbers_json,amount,status,expires_at FROM raffle_orders ORDER BY created_at DESC LIMIT 40").all()]);
     const count = Object.fromEntries(counts.results.map((row) => [row.status, row.count])); const paid = await env.DB.prepare("SELECT COUNT(*) AS count FROM raffle_orders WHERE status IN ('paid','paid_demo')").first(); const pending = await env.DB.prepare("SELECT COUNT(*) AS count FROM raffle_orders WHERE status='pending' AND expires_at>?").bind(now).first();
-    return json({ total: 200, sold: count.sold || 0, reserved: count.reserved || 0, available: count.available || 0, gross: (count.sold || 0) * 20, paymentMode: mpConfigured(env) ? "mercadopago" : "unavailable", testMode: env.MERCADOPAGO_TEST_MODE === "true", emailConfigured: Boolean(env.RESEND_API_KEY && env.RECEIPT_EMAIL_FROM), paidNumberCount: count.sold || 0, salesClosed: Boolean(cfg.sales_closed), drawResult: cfg.draw_result ? JSON.parse(cfg.draw_result) : null, orders: orders.results.map((o) => ({ id: o.id.slice(0, 8), name: o.name, email: o.email, phone: o.phone, numbers: JSON.parse(o.numbers_json), amount: o.amount, status: o.status, expiresAt: o.expires_at })), paidCount: paid.count, pendingCount: pending.count });
+    return json({ total: 200, sold: count.sold || 0, reserved: count.reserved || 0, available: count.available || 0, gross: (count.sold || 0) * 20, paymentMode: checkoutConfigured(env) ? "mercadopago" : "unavailable", testMode: env.MERCADOPAGO_TEST_MODE === "true", emailConfigured: Boolean(env.RESEND_API_KEY && env.RECEIPT_EMAIL_FROM), paidNumberCount: count.sold || 0, salesClosed: Boolean(cfg.sales_closed), drawResult: cfg.draw_result ? JSON.parse(cfg.draw_result) : null, orders: orders.results.map((o) => ({ id: o.id.slice(0, 8), name: o.name, email: o.email, phone: o.phone, numbers: JSON.parse(o.numbers_json), amount: o.amount, status: o.status, expiresAt: o.expires_at })), paidCount: paid.count, pendingCount: pending.count });
   }
   return json({ error: "Rota da API não encontrada." }, 404);
 }

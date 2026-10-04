@@ -6,7 +6,13 @@ const selected = new Set();
 let raffle = null;
 let activeFilter = "all";
 let holdTimer = null;
+let paymentPollTimer = null;
 let toastTimer = null;
+let mercadoPago = null;
+let bricksBuilder = null;
+let paymentBrickController = null;
+let statusScreenBrickController = null;
+let paymentConfig = null;
 const grid = document.querySelector("#number-grid");
 const toast = document.querySelector("#toast");
 const dialog = document.querySelector("#checkout-dialog");
@@ -26,10 +32,10 @@ async function loadState() {
   previewNotice.hidden = raffle.paymentMode === "live";
   previewNotice.textContent =
     raffle.paymentMode === "test"
-      ? "MODO DE TESTE: use somente uma conta compradora de teste do Mercado Pago. Nenhum pagamento real será feito."
+      ? "MODO DE TESTE: o checkout seguro do Mercado Pago está incorporado a este site e nenhum pagamento real será feito."
       : raffle.paymentMode === "unavailable"
-        ? "PAGAMENTOS EM CONFIGURAÇÃO: as reservas e compras serão liberadas quando o pagamento seguro estiver ativo."
-        : "PRÉVIA: use dados fictícios. Pagamentos e confirmações são simulações, sem cobrança real.";
+        ? "PAGAMENTOS EM CONFIGURAÇÃO: as reservas e compras serão liberadas quando a credencial pública do checkout estiver ativa."
+        : "PAGAMENTO SEGURO: Pix e cartão são processados pelo Mercado Pago sem sair deste site.";
   document.querySelector("#sales-closed-notice").hidden = raffle.salesOpen;
   for (const item of raffle.numbers)
     if (item.status !== "available" || !raffle.salesOpen)
@@ -178,24 +184,92 @@ if ("IntersectionObserver" in window) {
   selectionCard.classList.add("is-visible");
 }
 
+async function getPaymentConfig() {
+  if (paymentConfig) return paymentConfig;
+  const response = await fetch("/api/payment-config", { cache: "no-store" });
+  const data = await response.json();
+  if (!response.ok || !data.publicKey)
+    throw new Error(data.error || "Pagamento seguro ainda não configurado.");
+  paymentConfig = data;
+  return data;
+}
+
+async function unmountPaymentBricks() {
+  const controllers = [paymentBrickController, statusScreenBrickController];
+  paymentBrickController = null;
+  statusScreenBrickController = null;
+  for (const controller of controllers) {
+    if (!controller?.unmount) continue;
+    try {
+      await controller.unmount();
+    } catch {}
+  }
+}
+
+function stopPaymentTimers() {
+  if (holdTimer) clearInterval(holdTimer);
+  if (paymentPollTimer) clearInterval(paymentPollTimer);
+  holdTimer = null;
+  paymentPollTimer = null;
+}
+
+function startHoldCountdown(hold) {
+  if (holdTimer) clearInterval(holdTimer);
+  const update = () => {
+    const countdown = document.querySelector("#hold-countdown");
+    if (!countdown) return;
+    const seconds = Math.max(0, Math.ceil((hold.expiresAt - Date.now()) / 1000));
+    countdown.textContent = seconds
+      ? `◷ Reserva expira em ${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`
+      : "A reserva expirou. Escolha os números novamente.";
+    if (!seconds) {
+      clearInterval(holdTimer);
+      holdTimer = null;
+      if (paymentPollTimer) clearInterval(paymentPollTimer);
+      paymentPollTimer = null;
+      loadState().catch(() => {});
+    }
+  };
+  update();
+  holdTimer = setInterval(update, 1000);
+}
+
+function newPaymentAttemptId() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (char) => {
+    const value = Math.floor(Math.random() * 16);
+    const next = char === "x" ? value : (value & 0x3) | 0x8;
+    return next.toString(16);
+  });
+}
+
+async function ensureMercadoPago() {
+  const config = await getPaymentConfig();
+  if (!window.MercadoPago)
+    throw new Error("Não foi possível carregar o checkout seguro do Mercado Pago.");
+  if (!mercadoPago) {
+    mercadoPago = new window.MercadoPago(config.publicKey, { locale: "pt-BR" });
+    bricksBuilder = mercadoPago.bricks();
+  }
+  return config;
+}
+
 function showCheckoutForm() {
   if (!raffle?.salesOpen) return notify("As vendas da rifa foram encerradas.");
+  if (raffle.paymentMode === "unavailable")
+    return notify("O pagamento seguro ainda está sendo configurado.");
   const checkoutNote =
     raffle.paymentMode === "test"
-      ? "Ambiente de teste do Mercado Pago: ao continuar, entre com uma conta compradora de teste. Sua conta pessoal não funciona no sandbox."
-      : raffle.paymentMode === "live"
-        ? "Após reservar os números, você seguirá ao checkout seguro do Mercado Pago para pagar via Pix ou cartão."
-        : "Prévia local: nenhum pagamento será cobrado. Pix e cartão reais estarão disponíveis após configurar o Mercado Pago.";
-  checkoutContent.innerHTML = `<div class="eyebrow">RIFA BENEFICENTE · IGREJA MINISTÉRIO CATALUNHA</div><h2>Dados da participação.</h2><p>Preencha seus dados para reservar os números por até 30 minutos e seguir para o pagamento.</p><form class="checkout-form" id="participant-form"><label>Nome completo<input name="name" autocomplete="name" required minlength="3" placeholder="Como você se chama?" /></label><label>E-mail<input name="email" type="email" autocomplete="email" required placeholder="voce@email.com" /></label><label>Telefone / WhatsApp<input name="phone" type="tel" autocomplete="tel" required placeholder="(00) 00000-0000" /></label><label>Forma de pagamento</label><div class="method-row"><button type="button" class="method-choice active" data-method="pix">◈ &nbsp; Pix</button><button type="button" class="method-choice" data-method="card">▣ &nbsp; Cartão</button></div><p class="checkout-error" id="checkout-error"></p><button class="button button-lime" type="submit">Continuar · ${money(selected.size * raffle.price)} <span>→</span></button></form><p class="demo-banner">${checkoutNote}</p>`;
+      ? "Ambiente de teste: o checkout será exibido aqui mesmo e nenhum pagamento real será feito."
+      : "Pix e cartão serão processados com segurança pelo Mercado Pago sem redirecionar você para outro site.";
+  checkoutContent.innerHTML = `<div class="eyebrow">RIFA BENEFICENTE · IGREJA MINISTÉRIO CATALUNHA</div><h2>Dados da participação.</h2><p>Preencha seus dados para reservar os números por 30 minutos e pagar aqui mesmo.</p><form class="checkout-form" id="participant-form"><label>Nome completo<input name="name" autocomplete="name" required minlength="3" placeholder="Como você se chama?" /></label><label>E-mail<input name="email" type="email" autocomplete="email" required placeholder="voce@email.com" /></label><label>Telefone / WhatsApp<input name="phone" type="tel" autocomplete="tel" required placeholder="(00) 00000-0000" /></label><label>Forma de pagamento</label><div class="method-row"><button type="button" class="method-choice active" data-method="pix">◈ &nbsp; Pix</button><button type="button" class="method-choice" data-method="card">▣ &nbsp; Cartão</button></div><p class="checkout-error" id="checkout-error"></p><button class="button button-lime" type="submit">Continuar · ${money(selected.size * raffle.price)} <span>→</span></button></form><p class="demo-banner">${checkoutNote}</p>`;
   let method = "pix";
   checkoutContent.querySelectorAll(".method-choice").forEach((button) =>
     button.addEventListener("click", () => {
       method = button.dataset.method;
       checkoutContent
         .querySelectorAll(".method-choice")
-        .forEach((choice) =>
-          choice.classList.toggle("active", choice === button),
-        );
+        .forEach((choice) => choice.classList.toggle("active", choice === button));
     }),
   );
   checkoutContent
@@ -207,7 +281,9 @@ function showCheckoutForm() {
       const error = checkoutContent.querySelector("#checkout-error");
       const submit = event.currentTarget.querySelector('[type="submit"]');
       submit.disabled = true;
+      error.textContent = "";
       try {
+        await ensureMercadoPago();
         const response = await fetch("/api/hold", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -216,74 +292,216 @@ function showCheckoutForm() {
             name: form.get("name"),
             email: form.get("email"),
             phone: form.get("phone"),
-            method,
           }),
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error);
         selected.clear();
-        if (data.checkoutUrl) {
-          window.location.assign(data.checkoutUrl);
-          return;
-        }
-        showPayment(data, method);
+        data.payerEmail = String(form.get("email") || "");
+        data.method = method;
         await loadState();
+        await showEmbeddedPayment(data);
       } catch (err) {
-        error.textContent =
-          err.message || "Não foi possível reservar os números.";
+        error.textContent = err.message || "Não foi possível reservar os números.";
         submit.disabled = false;
       }
     });
   dialog.showModal();
 }
 
-function showPayment(hold, method) {
+async function showEmbeddedPayment(hold) {
+  await ensureMercadoPago();
+  await unmountPaymentBricks();
+  stopPaymentTimers();
   const numberList = hold.numbers
     .map((number) => String(number).padStart(3, "0"))
     .join(", ");
-  if (holdTimer) clearInterval(holdTimer);
-  checkoutContent.innerHTML = `<div class="eyebrow">${method === "pix" ? "PAGAMENTO VIA PIX" : "PAGAMENTO COM CARTÃO"}</div><h2>${method === "pix" ? "Sua reserva está feita." : "Reserva criada."}</h2><p>Números ${numberList} · total de <b>${money(hold.amount)}</b></p><div class="pix-demo"><p>${method === "pix" ? "O QR Code válido será apresentado pelo Mercado Pago quando as credenciais de teste estiverem configuradas." : "O checkout seguro com cartão será aberto pelo Mercado Pago quando as credenciais de teste estiverem configuradas."}</p></div><p class="demo-banner">Prévia local: não houve cobrança. Para conferir o comprovante, use o botão abaixo para simular uma confirmação de teste. Se não pagar, a reserva expira em 30 minutos.</p><p id="hold-countdown" class="hold-note">◷ Reserva expira em 30:00</p><button class="button button-lime" id="confirm-demo">Simular pagamento de teste <span>→</span></button>`;
-  const countdown = document.querySelector("#hold-countdown");
-  holdTimer = setInterval(() => {
-    const seconds = Math.max(
-      0,
-      Math.ceil((hold.expiresAt - Date.now()) / 1000),
+  checkoutContent.innerHTML = `<div class="eyebrow">${hold.method === "pix" ? "PAGAMENTO VIA PIX" : "PAGAMENTO COM CARTÃO"}</div><h2>Finalize sua participação.</h2><p>Números ${numberList} · total de <b>${money(hold.amount)}</b></p><p class="checkout-secure-note">Pagamento processado com segurança pelo Mercado Pago dentro desta página.</p><div class="payment-brick-shell"><div id="paymentBrick_container"></div></div><p class="checkout-error" id="payment-error" role="alert"></p><p id="hold-countdown" class="hold-note"></p>`;
+  startHoldCountdown(hold);
+  const methods =
+    hold.method === "pix"
+      ? { bankTransfer: "all" }
+      : { creditCard: "all", debitCard: "all", prepaidCard: "all" };
+  const settings = {
+    initialization: {
+      amount: Number(hold.amount),
+      payer: { email: hold.payerEmail },
+    },
+    customization: {
+      paymentMethods: methods,
+      visual: { style: { theme: "default" } },
+    },
+    callbacks: {
+      onReady: () => {},
+      onSubmit: ({ formData }) =>
+        new Promise(async (resolve, reject) => {
+          const error = document.querySelector("#payment-error");
+          if (error) error.textContent = "";
+          try {
+            const response = await fetch("/api/payments", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                orderId: hold.id,
+                formData,
+                idempotencyKey: newPaymentAttemptId(),
+              }),
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || "Não foi possível processar o pagamento.");
+            if (data.expiresAt) hold.expiresAt = data.expiresAt;
+            resolve();
+            setTimeout(async () => {
+              try {
+                if (data.status === "approved") {
+                  const confirmed = await syncOrderPayment(hold.id, data.paymentId);
+                  if (confirmed) return;
+                }
+                await showPaymentStatus(hold, data);
+              } catch (transitionError) {
+                console.error("Payment result transition", transitionError);
+                notify("O pagamento foi enviado, mas não foi possível atualizar a tela. A confirmação continuará sendo verificada.");
+              }
+            }, 0);
+          } catch (err) {
+            if (error) error.textContent = err.message || "Não foi possível processar o pagamento.";
+            reject(err);
+          }
+        }),
+      onError: (error) => {
+        console.error("Mercado Pago Brick", error);
+        const target = document.querySelector("#payment-error");
+        if (target) target.textContent = "O checkout seguro encontrou um erro. Confira os dados e tente novamente.";
+      },
+    },
+  };
+  try {
+    paymentBrickController = await bricksBuilder.create(
+      "payment",
+      "paymentBrick_container",
+      settings,
     );
-    countdown.textContent = seconds
-      ? `◷ Reserva expira em ${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`
-      : "A reserva expirou. Escolha os números novamente.";
-    if (!seconds) {
-      clearInterval(holdTimer);
-      document.querySelector("#confirm-demo").disabled = true;
-      loadState();
-    }
-  }, 1000);
-  document
-    .querySelector("#confirm-demo")
-    .addEventListener("click", async (event) => {
-      event.currentTarget.disabled = true;
-      const response = await fetch("/api/demo/confirm", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: hold.id }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        notify(data.error);
-        dialog.close();
-        await loadState();
-        return;
-      }
-      clearInterval(holdTimer);
-      const receiptResponse = await fetch(`/api/receipt/${hold.id}`, {
-        cache: "no-store",
-      });
-      if (!receiptResponse.ok) {
-        notify("Compra confirmada no modo de teste, mas não foi possível abrir o comprovante.");
-        dialog.close();
-      } else showReceipt(await receiptResponse.json());
-      await loadState();
+  } catch (error) {
+    console.error("Payment Brick render", error);
+    const target = document.querySelector("#payment-error");
+    if (target) target.textContent = "Não foi possível carregar o checkout seguro. Atualize a página e tente novamente.";
+  }
+}
+
+async function syncOrderPayment(orderId, paymentId) {
+  const query = paymentId ? `?payment_id=${encodeURIComponent(paymentId)}` : "";
+  const response = await fetch(`/api/order-status/${encodeURIComponent(orderId)}${query}`, {
+    cache: "no-store",
+  });
+  if (!response.ok) return false;
+  const data = await response.json();
+  if (data.status === "paid") {
+    const receiptResponse = await fetch(`/api/receipt/${encodeURIComponent(orderId)}`, {
+      cache: "no-store",
     });
+    if (receiptResponse.ok) {
+      showReceipt(await receiptResponse.json());
+      await loadState();
+      return true;
+    }
+    notify("Pagamento confirmado! Seus números estão garantidos.");
+    return true;
+  }
+  if (["payment_review", "late_payment_review"].includes(data.status)) {
+    notify("O pagamento foi recebido e o pedido entrou em revisão.");
+    return false;
+  }
+  return false;
+}
+
+function renderPixFallback(container, pix) {
+  if (!pix?.qrCodeBase64 && !pix?.qrCode) return false;
+  container.innerHTML = `<div class="pix-fallback"><h3>Pague com Pix</h3>${pix.qrCodeBase64 ? `<img class="pix-qr" src="data:image/png;base64,${escapeHTML(pix.qrCodeBase64)}" alt="QR Code Pix" />` : ""}<p>Escaneie o QR Code no aplicativo do seu banco ou use o código Pix abaixo.</p>${pix.qrCode ? `<textarea class="pix-copy-code" readonly>${escapeHTML(pix.qrCode)}</textarea><button type="button" class="button button-lime" id="copy-pix-code">Copiar código Pix</button>` : ""}</div>`;
+  document.querySelector("#copy-pix-code")?.addEventListener("click", async (event) => {
+    try {
+      await navigator.clipboard.writeText(pix.qrCode);
+      event.currentTarget.textContent = "Código Pix copiado";
+    } catch {
+      notify("Não foi possível copiar automaticamente. Selecione o código Pix manualmente.");
+    }
+  });
+  return true;
+}
+
+async function showPaymentStatus(hold, payment) {
+  await unmountPaymentBricks();
+  stopPaymentTimers();
+  const numberList = hold.numbers
+    .map((number) => String(number).padStart(3, "0"))
+    .join(", ");
+  checkoutContent.innerHTML = `<div class="eyebrow">STATUS DO PAGAMENTO</div><h2>${payment.status === "rejected" ? "Pagamento não aprovado." : payment.status === "approved" ? "Pagamento recebido." : "Conclua seu pagamento."}</h2><p>Números ${numberList} · total de <b>${money(hold.amount)}</b></p><div class="payment-brick-shell"><div id="statusScreenBrick_container"></div></div><p class="checkout-error" id="status-error" role="alert"></p><div id="status-actions"></div><p id="hold-countdown" class="hold-note"></p>`;
+  startHoldCountdown(hold);
+  const statusTarget = document.querySelector("#statusScreenBrick_container");
+  const settings = {
+    initialization: {
+      paymentId: String(payment.paymentId),
+      ...(payment.threeDsInfo?.externalResourceURL && payment.threeDsInfo?.creq
+        ? {
+            additionalInfo: {
+              externalResourceURL: payment.threeDsInfo.externalResourceURL,
+              creq: payment.threeDsInfo.creq,
+            },
+          }
+        : {}),
+    },
+    callbacks: {
+      onReady: () => {},
+      onError: (error) => {
+        console.error("Status Screen Brick", error);
+        if (!renderPixFallback(statusTarget, payment.pix)) {
+          const target = document.querySelector("#status-error");
+          if (target) target.textContent = "Não foi possível carregar os detalhes do pagamento. A confirmação continuará sendo verificada.";
+        }
+      },
+    },
+  };
+  try {
+    statusScreenBrickController = await bricksBuilder.create(
+      "statusScreen",
+      "statusScreenBrick_container",
+      settings,
+    );
+  } catch (error) {
+    console.error("Status Screen render", error);
+    if (!renderPixFallback(statusTarget, payment.pix)) {
+      const target = document.querySelector("#status-error");
+      if (target) target.textContent = "Não foi possível carregar os detalhes do pagamento. A confirmação continuará sendo verificada.";
+    }
+  }
+  if (payment.status === "rejected") {
+    document.querySelector("#status-actions").innerHTML =
+      '<button type="button" class="button button-lime" id="retry-payment">Tentar outro pagamento <span>→</span></button>';
+    document.querySelector("#retry-payment").addEventListener("click", () =>
+      showEmbeddedPayment(hold).catch((error) => notify(error.message)),
+    );
+  } else {
+    startPaymentPolling(hold, payment.paymentId);
+  }
+}
+
+function startPaymentPolling(hold, paymentId) {
+  if (paymentPollTimer) clearInterval(paymentPollTimer);
+  let busy = false;
+  const poll = async () => {
+    if (busy || !dialog.open) return;
+    busy = true;
+    try {
+      const done = await syncOrderPayment(hold.id, paymentId);
+      if (done && paymentPollTimer) {
+        clearInterval(paymentPollTimer);
+        paymentPollTimer = null;
+      }
+    } finally {
+      busy = false;
+    }
+  };
+  paymentPollTimer = setInterval(poll, 2500);
+  setTimeout(poll, 700);
 }
 
 function escapeHTML(value) {
@@ -293,7 +511,8 @@ function escapeHTML(value) {
 }
 
 function showReceipt(receipt) {
-  clearInterval(holdTimer);
+  stopPaymentTimers();
+  unmountPaymentBricks().catch(() => {});
   const numberList = receipt.numbers
     .map((number) => String(number).padStart(3, "0"))
     .join(", ");
@@ -335,7 +554,8 @@ function showReceipt(receipt) {
 }
 
 document.querySelector("#checkout-dialog").addEventListener("close", () => {
-  if (holdTimer) clearInterval(holdTimer);
+  stopPaymentTimers();
+  unmountPaymentBricks().catch(() => {});
 });
 document.querySelector(".menu-button").addEventListener("click", () => {
   const button = document.querySelector(".menu-button");
