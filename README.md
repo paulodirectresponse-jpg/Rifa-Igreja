@@ -10,7 +10,7 @@ Requer Node.js 20 ou superior. Copie `.env.example` para `.env`, defina `ADMIN_P
 npm run dev
 ```
 
-Abra `http://localhost:4173`. O servidor local pode simular pagamentos para demonstração. Esse fluxo de simulação existe somente no servidor local; na implantação Cloudflare, compras ficam bloqueadas até a integração real estar configurada.
+Abra `http://localhost:4173`. O servidor local usa o mesmo checkout incorporado da produção quando as credenciais do Mercado Pago estão configuradas. Sem as credenciais completas, novas reservas ficam bloqueadas para evitar pedidos sem possibilidade de pagamento.
 
 ## Cloudflare Pages
 
@@ -41,20 +41,21 @@ Configure para o ambiente **Production** em **Settings → Variables and Secrets
 | --- | --- | --- |
 | `ADMIN_PASSWORD` | Secret | Senha forte escolhida para o painel |
 | `MERCADOPAGO_ACCESS_TOKEN` | Secret | Access Token de produção do Mercado Pago |
+| `MERCADOPAGO_PUBLIC_KEY` | Variable | Public Key de produção da mesma aplicação do Mercado Pago |
 | `MERCADOPAGO_WEBHOOK_SECRET` | Secret | Segredo de assinatura do webhook do Mercado Pago |
 | `PUBLIC_BASE_URL` | Variable | URL HTTPS estável do projeto, por exemplo `https://rifa-igreja.pages.dev` |
 | `MERCADOPAGO_TEST_MODE` | Variable | `false` para produção |
 
-O webhook enviado ao Mercado Pago é `https://rifa-igreja.pages.dev/api/webhooks/mercadopago`, usando a URL real do projeto. A Public Key não é necessária para este checkout server-side.
+O webhook enviado ao Mercado Pago é `https://rifa-igreja.pages.dev/api/webhooks/mercadopago`, usando a URL real do projeto. A Public Key é usada pelo MercadoPago.js no navegador para renderizar Checkout Bricks. Ela é pública por definição; o Access Token e o segredo do webhook continuam exclusivamente no servidor.
 
-Após salvar os valores, faça um novo deploy. Enquanto token, URL HTTPS e configuração do modo de pagamento não estiverem válidos, a API não reserva números nem aceita confirmação simulada.
+Após salvar os valores, faça um novo deploy. Enquanto Access Token, Public Key, URL HTTPS e configuração do modo de pagamento não estiverem válidos, a API não reserva números. Em produção, o webhook continua sendo a fonte de verdade da confirmação.
 
 Opcionalmente, configure `RESEND_API_KEY` e `RECEIPT_EMAIL_FROM` para envio de links de comprovante por e-mail.
 
 ## Funcionalidades
 
 - Reserva de 1 a 20 números por até 30 minutos, com liberação automática quando expira.
-- Checkout Pro do Mercado Pago para Pix ou cartão; os números só ficam vendidos após confirmação validada.
+- Checkout Bricks do Mercado Pago incorporado ao próprio site para Pix ou cartão, sem redirecionamento para o app/site do Mercado Pago; os números só ficam vendidos após confirmação validada.
 - Comprovante privado, compartilhamento da rifa e consulta de compra por e-mail.
 - Painel administrativo com visão das vendas, controle de abertura/encerramento e sorteio manual dos três números pagos.
 - Banco D1 para pedidos, sessões administrativas, reservas, vendas e resultado do sorteio.
