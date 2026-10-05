@@ -1925,6 +1925,24 @@ tbody tr:last-child td {
   background: rgba(238, 131, 97, 0.13);
   color: #f0a28a;
 }
+
+.reconcile-payment {
+  display: block;
+  margin-top: 8px;
+  border: 1px solid rgba(238, 131, 97, 0.42);
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: rgba(238, 131, 97, 0.08);
+  color: #ffd0bf;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.reconcile-payment:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
 .preview-notice {
   background: #e8d18a;
   color: #272818;

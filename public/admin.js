@@ -54,7 +54,7 @@ async function renderDashboard() {
     ? data.orders
         .map(
           (order) =>
-            `<tr><td><strong>${escapeHTML(order.name)}</strong><small>${escapeHTML(order.email)}<br>${escapeHTML(order.phone)}</small></td><td>${order.numbers.map((n) => String(n).padStart(3, "0")).join(", ")}</td><td>${money(order.amount)}</td><td><span class="status-tag ${order.status}">${statusLabel(order.status)}</span></td><td>${order.status === "pending" ? date(order.expiresAt) : "—"}</td></tr>`,
+            `<tr><td><strong>${escapeHTML(order.name)}</strong><small>${escapeHTML(order.email)}<br>${escapeHTML(order.phone)}</small></td><td>${order.numbers.map((n) => String(n).padStart(3, "0")).join(", ")}</td><td>${money(order.amount)}</td><td><span class="status-tag ${order.status}">${statusLabel(order.status)}</span>${order.status === "late_payment_review" && order.hasPayment ? `<button class="reconcile-payment" data-reconcile-order="${escapeHTML(order.reconcileId)}">Conferir e conciliar</button>` : ""}</td><td>${order.status === "pending" ? date(order.expiresAt) : "—"}</td></tr>`,
         )
         .join("")
     : '<tr><td colspan="5" class="empty-orders">Ainda não há pedidos nesta rifa.</td></tr>';
@@ -82,6 +82,14 @@ async function renderDashboard() {
     if (!window.confirm(confirmMessage)) return;
     event.currentTarget.disabled = true;
     await adminAction("/api/admin/sales", { closed });
+  });
+  document.querySelectorAll("[data-reconcile-order]").forEach((button) => {
+    button.addEventListener("click", async (event) => {
+      const orderId = event.currentTarget.dataset.reconcileOrder;
+      if (!window.confirm("Consultar este pedido no Mercado Pago. Se o pagamento estiver aprovado e os números puderem ser atribuídos sem conflito, a compra será confirmada no sistema.")) return;
+      event.currentTarget.disabled = true;
+      await adminAction("/api/admin/reconcile-payment", { orderId });
+    });
   });
   document.querySelector("#draw-now").addEventListener("click", async (event) => {
     if (!window.confirm("Realizar o sorteio agora? Serão escolhidos três números pagos, sem repetição. O resultado ficará registrado e não poderá ser sorteado novamente.")) return;

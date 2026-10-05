@@ -181,24 +181,31 @@ async function createMercadoPagoPayment(env, request, order, formData, idempoten
 
 async function settle(db, order, payment, salesClosed) {
   if (!order || !["approved", "processed"].includes(payment.status)) return;
-  if (order.status !== "pending") {
-    if (order.status !== "paid") await db.prepare("UPDATE raffle_orders SET status='late_payment_review' WHERE id=?").bind(order.id).run();
-    return;
-  }
+  if (order.status === "paid") return;
+  if (!["pending", "expired", "late_payment_review"].includes(order.status)) return;
   const approvedAt = Date.parse(payment.date_approved || payment.date_last_updated || payment.date_created || "");
   if (payment.external_reference !== order.id || (payment.currency_id && payment.currency_id !== "BRL") || Math.round(Number(payment.transaction_amount) * 100) !== Math.round(order.amount * 100)) {
-    await db.prepare("UPDATE raffle_orders SET status='payment_review' WHERE id=? AND status='pending'").bind(order.id).run(); return;
+    await db.prepare("UPDATE raffle_orders SET status='payment_review' WHERE id=? AND status!='paid'").bind(order.id).run(); return;
   }
-  if (!Number.isFinite(approvedAt) || approvedAt > order.expires_at || salesClosed) {
-    await db.prepare("UPDATE raffle_orders SET status='late_payment_review' WHERE id=? AND status='pending'").bind(order.id).run(); return;
+  if (salesClosed) {
+    await db.prepare("UPDATE raffle_orders SET status='late_payment_review' WHERE id=? AND status IN ('pending','expired','late_payment_review')").bind(order.id).run(); return;
   }
   const owned = await db.prepare("SELECT COUNT(*) AS count FROM raffle_numbers WHERE order_id=? AND status='reserved'").bind(order.id).first();
-  if (owned.count !== order.numbers.length) {
-    await db.prepare("UPDATE raffle_orders SET status='payment_review' WHERE id=? AND status='pending'").bind(order.id).run(); return;
+  if (owned.count !== order.numbers.length && owned.count === 0) {
+    const placeholders = order.numbers.map(() => "?").join(",");
+    const available = await db.prepare(`SELECT COUNT(*) AS count FROM raffle_numbers WHERE number IN (${placeholders}) AND status='available'`).bind(...order.numbers).first();
+    if (available.count === order.numbers.length) {
+      await db.prepare(`UPDATE raffle_numbers SET status='reserved',order_id=? WHERE number IN (${placeholders}) AND status='available'`).bind(order.id, ...order.numbers).run();
+    }
   }
+  const verifiedOwnership = await db.prepare("SELECT COUNT(*) AS count FROM raffle_numbers WHERE order_id=? AND status='reserved'").bind(order.id).first();
+  if (verifiedOwnership.count !== order.numbers.length) {
+    await db.prepare("UPDATE raffle_orders SET status='late_payment_review' WHERE id=? AND status IN ('pending','expired','late_payment_review')").bind(order.id).run(); return;
+  }
+  const paidAt = Number.isFinite(approvedAt) ? approvedAt : Date.now();
   await db.batch([
-    db.prepare("UPDATE raffle_numbers SET status='sold' WHERE order_id=? AND status='reserved'").bind(order.id),
-    db.prepare("UPDATE raffle_orders SET status='paid', paid_at=?, payment_id=? WHERE id=? AND status='pending'").bind(approvedAt, String(payment.id || ""), order.id),
+    db.prepare("UPDATE raffle_orders SET status='paid', paid_at=?, payment_id=? WHERE id=? AND status IN ('pending','expired','late_payment_review') AND (SELECT COUNT(*) FROM raffle_numbers WHERE order_id=? AND status='reserved')=?").bind(paidAt, String(payment.id || order.payment_id || ""), order.id, order.id, order.numbers.length),
+    db.prepare("UPDATE raffle_numbers SET status='sold' WHERE order_id=? AND status='reserved' AND EXISTS (SELECT 1 FROM raffle_orders WHERE id=? AND status='paid')").bind(order.id, order.id),
   ]);
 }
 
@@ -499,6 +506,35 @@ async function api(request, env) {
   }
   if (url.pathname.startsWith("/api/admin/") && !await adminOk(request, env)) return json({ error: "Acesso restrito." }, 401);
 
+  if (request.method === "POST" && url.pathname === "/api/admin/reconcile-payment") {
+    const { orderId } = await readJson(request);
+    if (!/^[a-f0-9]{32}$/i.test(orderId || "")) return json({ error: "Pedido inválido." }, 400);
+    const order = await getOrder(env.DB, orderId);
+    if (!order) return json({ error: "Pedido não encontrado." }, 404);
+    if (order.status === "paid") return json({ ok: true, status: "paid" });
+    if (!["pending", "expired", "late_payment_review"].includes(order.status)) return json({ error: "Este pedido precisa de análise manual." }, 409);
+    if (!order.provider_order_id && !/^\d{1,30}$/.test(order.payment_id || "")) return json({ error: "O pedido não tem uma referência consultável no Mercado Pago." }, 409);
+
+    let payment;
+    try {
+      payment = order.provider_order_id
+        ? normalizedOrderPayment(await fetchMpOrder(env, order.provider_order_id))
+        : await mpPayment(env, order.payment_id);
+    } catch {
+      return json({ error: "Não foi possível consultar este pagamento no Mercado Pago. Tente novamente." }, 502);
+    }
+    if (!["approved", "processed"].includes(payment.status)) return json({ error: "O Mercado Pago ainda não informa este pagamento como aprovado." }, 409);
+
+    const cfg = await settings();
+    await settle(env.DB, order, payment, cfg.sales_closed);
+    const updated = await getOrder(env.DB, order.id);
+    if (updated?.status === "paid") {
+      await sendReceiptEmail(env, request, updated).catch(() => {});
+      return json({ ok: true, status: "paid" });
+    }
+    return json({ error: "Pagamento aprovado, mas os números não puderam ser atribuídos com segurança. O pedido continua em revisão." }, 409);
+  }
+
   if (request.method === "POST" && url.pathname === "/api/admin/sales") {
     const { closed } = await readJson(request); if (typeof closed !== "boolean") return json({ error: "Informe se as vendas serão encerradas." }, 400);
     const cfg = await settings(); if (cfg.draw_result && !closed) return json({ error: "As vendas não podem ser reabertas depois do sorteio." }, 409);
@@ -516,7 +552,7 @@ async function api(request, env) {
   if (request.method === "GET" && url.pathname === "/api/admin/overview") {
     const [cfg, counts, orders] = await Promise.all([settings(), env.DB.prepare("SELECT status,COUNT(*) AS count FROM raffle_numbers GROUP BY status").all(), env.DB.prepare("SELECT id,name,email,phone,numbers_json,amount,status,expires_at FROM raffle_orders ORDER BY created_at DESC LIMIT 40").all()]);
     const count = Object.fromEntries(counts.results.map((row) => [row.status, row.count])); const paid = await env.DB.prepare("SELECT COUNT(*) AS count FROM raffle_orders WHERE status IN ('paid','paid_demo')").first(); const pending = await env.DB.prepare("SELECT COUNT(*) AS count FROM raffle_orders WHERE status='pending' AND expires_at>?").bind(now).first();
-    return json({ total: 250, sold: count.sold || 0, reserved: count.reserved || 0, available: count.available || 0, gross: (count.sold || 0) * 20, paymentMode: checkoutConfigured(env) ? "mercadopago" : "unavailable", testMode: env.MERCADOPAGO_TEST_MODE === "true", emailConfigured: receiptEmailConfigured(env), paidNumberCount: count.sold || 0, salesClosed: Boolean(cfg.sales_closed), drawResult: cfg.draw_result ? JSON.parse(cfg.draw_result) : null, orders: orders.results.map((o) => ({ id: o.id.slice(0, 8), name: o.name, email: o.email, phone: o.phone, numbers: JSON.parse(o.numbers_json), amount: o.amount, status: o.status, expiresAt: o.expires_at })), paidCount: paid.count, pendingCount: pending.count });
+    return json({ total: 250, sold: count.sold || 0, reserved: count.reserved || 0, available: count.available || 0, gross: (count.sold || 0) * 20, paymentMode: checkoutConfigured(env) ? "mercadopago" : "unavailable", testMode: env.MERCADOPAGO_TEST_MODE === "true", emailConfigured: receiptEmailConfigured(env), paidNumberCount: count.sold || 0, salesClosed: Boolean(cfg.sales_closed), drawResult: cfg.draw_result ? JSON.parse(cfg.draw_result) : null, orders: orders.results.map((o) => ({ id: o.id.slice(0, 8), reconcileId: o.id, hasPayment: Boolean(o.payment_id || o.provider_order_id), name: o.name, email: o.email, phone: o.phone, numbers: JSON.parse(o.numbers_json), amount: o.amount, status: o.status, expiresAt: o.expires_at })), paidCount: paid.count, pendingCount: pending.count });
   }
   return json({ error: "Rota da API não encontrada." }, 404);
 }
