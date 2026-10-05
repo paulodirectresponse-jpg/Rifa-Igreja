@@ -433,22 +433,26 @@ async function api(request, env) {
     if (!/^[a-f0-9]{32}$/i.test(id)) return json({ error: "Comprovante não encontrado." }, 404);
     const order = await getOrder(env.DB, id);
     if (!order || !["paid", "paid_demo"].includes(order.status)) return json({ error: "Comprovante não encontrado." }, 404);
-    return json({ name: order.name, email: order.email.replace(/(^.).*(@.*$)/, "$1•••$2"), numbers: order.numbers, amount: order.amount, paidAt: order.paid_at || order.created_at, demo: order.status === "paid_demo", receiptUrl: publicReceiptLink(env, request, id) });
+    return json({ name: order.name, email: order.email.replace(/(^.).*(@.*$)/, "$1•••$2"), numbers: order.numbers, amount: order.amount, paidAt: order.paid_at || order.created_at, demo: order.status === "paid_demo", lookupCode: id, receiptUrl: publicReceiptLink(env, request, id) });
   }
 
-  if (request.method === "POST" && url.pathname === "/api/receipt-link") {
-    const { email } = await readJson(request);
-    if (!/^\S+@\S+\.\S+$/.test(email || "")) return json({ error: "Informe um e-mail válido." }, 400);
-    const normalized = email.trim().toLowerCase(); const ipHash = await digest(request.headers.get("cf-connecting-ip") || "unknown"); const key = `${ipHash}:${normalized}`;
-    const recent = await env.DB.prepare("SELECT COUNT(*) AS count FROM receipt_requests WHERE request_key=? AND requested_at>?").bind(key, now - 15 * 60_000).first();
-    if (recent.count >= 3) return json({ error: "Aguarde alguns minutos antes de pedir outro link." }, 429);
-    await env.DB.prepare("INSERT INTO receipt_requests(request_key,requested_at) VALUES(?,?)").bind(key, now).run();
-    const emailConfigured = receiptEmailConfigured(env);
-    if (emailConfigured) {
-      const rows = await env.DB.prepare("SELECT * FROM raffle_orders WHERE lower(email)=? AND status IN ('paid','paid_demo')").bind(normalized).all();
-      for (const row of rows.results) await sendReceiptEmail(env, request, { ...row, numbers: JSON.parse(row.numbers_json) }).catch(() => {});
+  if (request.method === "POST" && url.pathname === "/api/receipt-lookup") {
+    const { code, phone } = await readJson(request);
+    const normalizedCode = String(code || "").trim().toLowerCase();
+    const normalizedPhone = String(phone || "").replace(/\D/g, "");
+    if (!/^[a-f0-9]{32}$/.test(normalizedCode) || normalizedPhone.length < 10 || normalizedPhone.length > 15) {
+      return json({ error: "Confira o código e o telefone usados na compra." }, 400);
     }
-    return json({ ok: true, emailConfigured, message: "Se houver compras confirmadas com esse e-mail, enviaremos um link seguro para consulta." });
+    const ipHash = await digest(request.headers.get("cf-connecting-ip") || "unknown");
+    const key = `lookup:${ipHash}`;
+    const recent = await env.DB.prepare("SELECT COUNT(*) AS count FROM receipt_requests WHERE request_key=? AND requested_at>?").bind(key, now - 15 * 60_000).first();
+    if (recent.count >= 5) return json({ error: "Muitas tentativas. Aguarde 15 minutos e tente novamente." }, 429);
+    await env.DB.prepare("INSERT INTO receipt_requests(request_key,requested_at) VALUES(?,?)").bind(key, now).run();
+    const order = await env.DB.prepare("SELECT * FROM raffle_orders WHERE id=? AND status IN ('paid','paid_demo')").bind(normalizedCode).first();
+    if (!order || String(order.phone || "").replace(/\D/g, "") !== normalizedPhone) {
+      return json({ error: "Não encontramos uma compra confirmada com esses dados. Confira o código e o telefone." }, 404);
+    }
+    return json({ ok: true, name: order.name, numbers: JSON.parse(order.numbers_json), amount: order.amount, receiptUrl: publicReceiptLink(env, request, normalizedCode) });
   }
 
   if (request.method === "POST" && url.pathname === "/api/webhooks/mercadopago") {
