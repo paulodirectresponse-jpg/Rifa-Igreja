@@ -52,13 +52,13 @@ Após salvar os valores, faça um novo deploy. Enquanto Access Token, Public Key
 
 Para enviar comprovantes pelo Gmail, habilite a Gmail API em um projeto Google Cloud, crie um cliente OAuth, autorize a conta remetente com o escopo `https://www.googleapis.com/auth/gmail.send` e obtenha um refresh token para acesso offline. No Cloudflare Production, adicione `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` e `GMAIL_REFRESH_TOKEN` como Secrets, e `RECEIPT_EMAIL_FROM` como o endereço Gmail autorizado. Nunca coloque esses valores no repositório. Um consentimento OAuth em modo de teste expira após sete dias; para uso contínuo, configure o app OAuth em produção e conclua a verificação exigida pelo Google para o escopo de envio.
 
-Como alternativa, configure `RESEND_API_KEY` e `RECEIPT_EMAIL_FROM` para usar Resend. Esses provedores são opcionais para o envio de confirmação; a consulta pelo site usa o código privado mostrado no comprovante e o telefone informado na compra.
+Como alternativa, configure `RESEND_API_KEY` e `RECEIPT_EMAIL_FROM` para usar Resend. Esses provedores são opcionais para o envio de confirmação; a consulta no site usa o nome completo e o telefone informados na compra.
 
 ## Funcionalidades
 
 - Reserva de 1 a 20 números por até 30 minutos, com liberação automática quando expira.
 - Checkout Bricks do Mercado Pago incorporado ao próprio site para Pix ou cartão, sem redirecionamento para o app/site do Mercado Pago; os números só ficam vendidos após confirmação validada.
-- Comprovante privado, compartilhamento da rifa e consulta no site por código privado e telefone.
+- Comprovante privado, compartilhamento da rifa e consulta de todas as compras confirmadas por nome e telefone.
 - Painel administrativo com visão das vendas, controle de abertura/encerramento e sorteio manual dos três números pagos.
 - Banco D1 para pedidos, sessões administrativas, reservas, vendas e resultado do sorteio.
 

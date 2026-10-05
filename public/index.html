@@ -227,11 +227,11 @@
         <div class="receipt-lookup-copy">
           <div class="eyebrow">JÁ PARTICIPOU?</div>
           <h2>Consulte seus <em>números.</em></h2>
-          <p>Consulte seus números no próprio site com o código privado do comprovante e o telefone informado na compra. Não precisa de e-mail para consultar.</p>
+          <p>Informe o nome completo e o telefone usados na compra para ver seus números confirmados aqui mesmo no site. Não precisa de e-mail para consultar.</p>
         </div>
         <form id="receipt-lookup-form" class="receipt-lookup-form">
-          <label for="receipt-code">Código privado do comprovante</label>
-          <div class="receipt-lookup-row"><input id="receipt-code" name="code" type="text" inputmode="text" autocapitalize="off" autocomplete="off" spellcheck="false" minlength="32" maxlength="32" required placeholder="Cole o código de 32 caracteres" /><input id="receipt-phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" required placeholder="Telefone usado na compra" /><button class="button button-lime" type="submit">Consultar <span>→</span></button></div>
+          <label for="receipt-name">Nome completo usado na compra</label>
+          <div class="receipt-lookup-row"><input id="receipt-name" name="name" type="text" autocomplete="name" minlength="3" maxlength="100" required placeholder="Seu nome completo" /><input id="receipt-phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" required placeholder="Telefone usado na compra" /><button class="button button-lime" type="submit">Consultar <span>→</span></button></div>
           <p id="receipt-lookup-message" role="status"></p>
         </form>
       </section>

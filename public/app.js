@@ -155,17 +155,31 @@ document
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          code: new FormData(form).get("code"),
+          name: new FormData(form).get("name"),
           phone: new FormData(form).get("phone"),
         }),
       });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Confira o código e o telefone e tente novamente.");
-      message.textContent = `Pagamento confirmado · números ${data.numbers.map((number) => String(number).padStart(3, "0")).join(", ")} · total ${money(data.amount)}. `;
-      const receiptLink = document.createElement("a");
-      receiptLink.href = data.receiptUrl;
-      receiptLink.textContent = "Abrir comprovante";
-      message.append(receiptLink);
+      if (!response.ok) throw new Error(data.error || "Confira o nome e o telefone e tente novamente.");
+      message.replaceChildren();
+      const summary = document.createElement("span");
+      summary.textContent = data.orders.length === 1
+        ? "Encontramos 1 compra confirmada:"
+        : `Encontramos ${data.orders.length} compras confirmadas:`;
+      message.append(summary);
+      const list = document.createElement("ul");
+      list.className = "receipt-lookup-results";
+      for (const order of data.orders) {
+        const item = document.createElement("li");
+        const details = document.createElement("span");
+        details.textContent = `Números ${order.numbers.map((number) => String(number).padStart(3, "0")).join(", ")} · ${money(order.amount)}`;
+        const receiptLink = document.createElement("a");
+        receiptLink.href = order.receiptUrl;
+        receiptLink.textContent = "Abrir comprovante";
+        item.append(details, receiptLink);
+        list.append(item);
+      }
+      message.append(list);
     } catch (error) {
       message.textContent = error.message || "Não foi possível solicitar o link agora.";
     } finally {
@@ -547,12 +561,7 @@ function showReceipt(receipt) {
     .map((number) => String(number).padStart(3, "0"))
     .join(", ");
   const receiptUrl = receipt.receiptUrl || location.href;
-  const lookupCode = receipt.lookupCode || new URL(receiptUrl, location.origin).searchParams.get("pedido") || "";
-  checkoutContent.innerHTML = `<div class="success-mark">✓</div><div class="eyebrow">${receipt.demo ? "COMPROVANTE DE TESTE" : "PAGAMENTO CONFIRMADO"}</div><h2>Participação confirmada.</h2><p><b>${escapeHTML(receipt.name)}</b> · ${escapeHTML(receipt.email)}</p><div class="receipt-details"><span>Seus números</span><b>${numberList}</b><span>Total pago</span><b>${money(receipt.amount)}</b><span>Confirmação</span><b>${new Intl.DateTimeFormat("pt-BR", { dateStyle: "medium", timeStyle: "short" }).format(new Date(receipt.paidAt))}</b><span>Código privado para consulta</span><b class="receipt-lookup-code">${escapeHTML(lookupCode)}</b></div>${receipt.demo ? '<p class="demo-banner">Este comprovante veio de uma simulação local. Nenhum pagamento real foi realizado.</p>' : ""}<button class="button button-quiet receipt-copy-code" id="copy-receipt-code" type="button">Copiar código de consulta</button><a class="button button-lime receipt-open" href="${escapeHTML(receiptUrl)}" target="_blank" rel="noreferrer">Abrir link privado do comprovante <span>↗</span></a><div class="receipt-share"><button class="button button-share" id="share-raffle" type="button">Compartilhar a rifa <span>↗</span></button><button class="button button-quiet" id="copy-raffle-link" type="button">Copiar link da rifa</button><p id="share-feedback" role="status" aria-live="polite"></p></div><button class="button button-quiet" id="finish-receipt">Fechar</button>`;
-  const lookupHint = document.createElement("p");
-  lookupHint.className = "checkout-secure-note";
-  lookupHint.textContent = "Guarde este código. Para consultar seus números no site, use o código e o telefone informado na compra.";
-  document.querySelector(".receipt-details").after(lookupHint);
+  checkoutContent.innerHTML = `<div class="success-mark">✓</div><div class="eyebrow">${receipt.demo ? "COMPROVANTE DE TESTE" : "PAGAMENTO CONFIRMADO"}</div><h2>Participação confirmada.</h2><p><b>${escapeHTML(receipt.name)}</b> · ${escapeHTML(receipt.email)}</p><div class="receipt-details"><span>Seus números</span><b>${numberList}</b><span>Total pago</span><b>${money(receipt.amount)}</b><span>Confirmação</span><b>${new Intl.DateTimeFormat("pt-BR", { dateStyle: "medium", timeStyle: "short" }).format(new Date(receipt.paidAt))}</b></div>${receipt.demo ? '<p class="demo-banner">Este comprovante veio de uma simulação local. Nenhum pagamento real foi realizado.</p>' : ""}<a class="button button-lime receipt-open" href="${escapeHTML(receiptUrl)}" target="_blank" rel="noreferrer">Abrir link privado do comprovante <span>↗</span></a><div class="receipt-share"><button class="button button-share" id="share-raffle" type="button">Compartilhar a rifa <span>↗</span></button><button class="button button-quiet" id="copy-raffle-link" type="button">Copiar link da rifa</button><p id="share-feedback" role="status" aria-live="polite"></p></div><button class="button button-quiet" id="finish-receipt">Fechar</button>`;
   document
     .querySelector("#finish-receipt")
     .addEventListener("click", () => dialog.close());
@@ -560,14 +569,6 @@ function showReceipt(receipt) {
     "Participe da rifa beneficente da Igreja Evangelística Ministério Catalunha e ajude na compra da bateria da igreja.";
   const raffleUrl = `${location.origin}/`;
   const shareFeedback = document.querySelector("#share-feedback");
-  document.querySelector("#copy-receipt-code").addEventListener("click", async () => {
-    try {
-      await navigator.clipboard.writeText(lookupCode);
-      shareFeedback.textContent = "Código de consulta copiado. Guarde-o junto do telefone usado na compra.";
-    } catch {
-      shareFeedback.textContent = `Guarde este código para consultar depois: ${lookupCode}`;
-    }
-  });
   document.querySelector("#share-raffle").addEventListener("click", async () => {
     try {
       if (navigator.share)

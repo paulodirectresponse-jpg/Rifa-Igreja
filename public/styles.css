@@ -2526,8 +2526,8 @@ tbody tr:last-child td {
   font-size: 10px;
 }
 #receipt-lookup-message a { color: #c5d9ff; font-weight: 700; }
-.receipt-lookup-code { overflow-wrap: anywhere; font: 600 12px/1.5 ui-monospace, monospace; }
-.receipt-copy-code { width: 100%; margin: 8px 0; }
+.receipt-lookup-results { display: grid; gap: 7px; margin: 8px 0 0; padding: 0; list-style: none; }
+.receipt-lookup-results li { display: flex; justify-content: space-between; gap: 12px; padding: 9px 10px; border: 1px solid rgba(150,178,222,.22); border-radius: 8px; }
 .raffle-results {
   padding: 28px;
   border: 1px solid rgba(150, 178, 222, 0.22);
@@ -2676,6 +2676,7 @@ tbody tr:last-child td {
   .receipt-lookup-row .button {
     justify-content: center;
   }
+  .receipt-lookup-results li { flex-direction: column; gap: 4px; }
   .raffle-winners {
     grid-template-columns: 1fr;
   }
