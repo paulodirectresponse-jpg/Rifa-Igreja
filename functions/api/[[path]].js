@@ -163,21 +163,19 @@ async function createMercadoPagoPayment(env, request, order, formData, idempoten
     },
     body: JSON.stringify(payload),
   });
-  const payment = await response.json();
+  const responseText = await response.text();
+  let payment;
+  try { payment = JSON.parse(responseText); } catch { payment = null; }
   if (!response.ok || !payment.id) {
     console.error("Mercado Pago payment error", JSON.stringify({
       httpStatus: response.status,
-      error: payment?.error || null,
-      message: payment?.message || null,
-      causes: Array.isArray(payment?.cause)
-        ? payment.cause.map((cause) => ({ code: cause?.code || null, description: cause?.description || null }))
-        : [],
+      requestId: response.headers.get("x-request-id") || response.headers.get("x-correlation-id") || null,
+      contentType: response.headers.get("content-type") || null,
+      response: safeProviderErrorBody(payment ?? responseText),
     }));
     throw new Error("Mercado Pago não criou o pagamento");
   }
-  if (payment.status !== "rejected") {
-    await env.DB.prepare("UPDATE raffle_orders SET payment_id=?, expires_at=? WHERE id=? AND status='pending'").bind(String(payment.id), expiresAt, order.id).run();
-  }
+  await env.DB.prepare("UPDATE raffle_orders SET payment_id=? WHERE id=? AND status='pending'").bind(String(payment.id), order.id).run();
   return payment;
 }
 
