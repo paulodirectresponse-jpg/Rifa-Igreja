@@ -262,11 +262,15 @@ function showCheckoutForm() {
     raffle.paymentMode === "test"
       ? "Ambiente de teste: o checkout será exibido aqui mesmo e nenhum pagamento real será feito."
       : "Pix e cartão serão processados com segurança pelo Mercado Pago sem redirecionar você para outro site.";
-  checkoutContent.innerHTML = `<div class="eyebrow">RIFA BENEFICENTE · IGREJA MINISTÉRIO CATALUNHA</div><h2>Dados da participação.</h2><p>Preencha seus dados para reservar os números por 30 minutos e pagar aqui mesmo.</p><form class="checkout-form" id="participant-form"><label>Nome completo<input name="name" autocomplete="name" required minlength="3" placeholder="Como você se chama?" /></label><label>E-mail<input name="email" type="email" autocomplete="email" required placeholder="voce@email.com" /></label><label>Telefone / WhatsApp<input name="phone" type="tel" autocomplete="tel" required placeholder="(00) 00000-0000" /></label><label>Forma de pagamento</label><div class="method-row"><button type="button" class="method-choice active" data-method="pix">◈ &nbsp; Pix</button><button type="button" class="method-choice" data-method="card">▣ &nbsp; Cartão</button></div><p class="checkout-error" id="checkout-error"></p><button class="button button-lime" type="submit">Continuar · ${money(selected.size * raffle.price)} <span>→</span></button></form><p class="demo-banner">${checkoutNote}</p>`;
+  checkoutContent.innerHTML = `<div class="eyebrow">RIFA BENEFICENTE · IGREJA MINISTÉRIO CATALUNHA</div><h2>Dados da participação.</h2><p>Preencha seus dados para reservar os números por 30 minutos e pagar aqui mesmo.</p><form class="checkout-form" id="participant-form"><label>Nome completo<input name="name" autocomplete="name" required minlength="3" placeholder="Como você se chama?" /></label><label>E-mail<input name="email" type="email" autocomplete="email" required placeholder="voce@email.com" /></label><label>Telefone / WhatsApp<input name="phone" type="tel" autocomplete="tel" required placeholder="(00) 00000-0000" /></label><label id="pix-identification-field">CPF para o Pix<input name="identificationNumber" type="text" inputmode="numeric" autocomplete="off" required pattern="[0-9.\\-]{11,14}" placeholder="000.000.000-00" /><small>Enviado ao Mercado Pago para processar o Pix; não é armazenado pela rifa.</small></label><label>Forma de pagamento</label><div class="method-row"><button type="button" class="method-choice active" data-method="pix">◈ &nbsp; Pix</button><button type="button" class="method-choice" data-method="card">▣ &nbsp; Cartão</button></div><p class="checkout-error" id="checkout-error"></p><button class="button button-lime" type="submit">Continuar · ${money(selected.size * raffle.price)} <span>→</span></button></form><p class="demo-banner">${checkoutNote}</p>`;
   let method = "pix";
+  const pixIdentificationField = checkoutContent.querySelector("#pix-identification-field");
+  const identificationInput = pixIdentificationField.querySelector("input");
   checkoutContent.querySelectorAll(".method-choice").forEach((button) =>
     button.addEventListener("click", () => {
       method = button.dataset.method;
+      pixIdentificationField.hidden = method !== "pix";
+      identificationInput.required = method === "pix";
       checkoutContent
         .querySelectorAll(".method-choice")
         .forEach((choice) => choice.classList.toggle("active", choice === button));
@@ -280,6 +284,11 @@ function showCheckoutForm() {
       const numbers = [...selected];
       const error = checkoutContent.querySelector("#checkout-error");
       const submit = event.currentTarget.querySelector('[type="submit"]');
+      const identificationNumber = String(form.get("identificationNumber") || "").replace(/\D/g, "");
+      if (method === "pix" && identificationNumber.length !== 11) {
+        error.textContent = "Informe um CPF válido para gerar o Pix.";
+        return;
+      }
       submit.disabled = true;
       error.textContent = "";
       try {
@@ -299,6 +308,7 @@ function showCheckoutForm() {
         selected.clear();
         data.payerEmail = String(form.get("email") || "");
         data.method = method;
+        data.payerIdentification = method === "pix" ? { type: "CPF", number: identificationNumber } : null;
         await loadState();
         await showEmbeddedPayment(data);
       } catch (err) {
@@ -344,6 +354,7 @@ async function showEmbeddedPayment(hold) {
               body: JSON.stringify({
                 orderId: hold.id,
                 formData,
+                payerIdentification: hold.payerIdentification,
                 idempotencyKey: newPaymentAttemptId(),
               }),
             });

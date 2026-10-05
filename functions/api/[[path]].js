@@ -83,12 +83,12 @@ const paymentSummary = (payment, order) => {
   };
 };
 
-async function createMercadoPagoPayment(env, request, order, formData, idempotencyKey) {
+async function createMercadoPagoPayment(env, request, order, formData, payerIdentification, idempotencyKey) {
   const method = String(formData?.payment_method_id || "").trim();
   const token = String(formData?.token || "").trim();
   const installments = Number(formData?.installments || 1);
   const issuer = formData?.issuer_id == null ? null : Number(formData.issuer_id);
-  const identification = formData?.payer?.identification || {};
+  const identification = payerIdentification || formData?.payer?.identification || {};
   const identificationType = String(identification.type || "").trim();
   const identificationNumber = String(identification.number || "").replace(/\D/g, "");
   if (!/^[a-z0-9_-]{2,40}$/i.test(method)) throw new Error("Meio de pagamento inválido");
@@ -225,7 +225,7 @@ async function api(request, env) {
 
   if (request.method === "POST" && url.pathname === "/api/payments") {
     if (!checkoutConfigured(env)) return json({ error: "Pagamento seguro ainda não configurado." }, 503);
-    const { orderId, formData, idempotencyKey } = await readJson(request);
+    const { orderId, formData, payerIdentification, idempotencyKey } = await readJson(request);
     if (!/^[a-f0-9]{32}$/i.test(orderId || "") || !/^[0-9a-f-]{16,64}$/i.test(idempotencyKey || "")) {
       return json({ error: "Solicitação de pagamento inválida." }, 400);
     }
@@ -249,7 +249,7 @@ async function api(request, env) {
     }
 
     try {
-      const payment = await createMercadoPagoPayment(env, request, order, formData, idempotencyKey);
+      const payment = await createMercadoPagoPayment(env, request, order, formData, payerIdentification, idempotencyKey);
       await settle(env.DB, order, payment, cfg.sales_closed);
       order = await getOrder(env.DB, order.id);
       if (!order) throw new Error("Pedido não encontrado após criação do pagamento");
