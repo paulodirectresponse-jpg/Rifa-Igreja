@@ -123,7 +123,7 @@ function renderDrawResult() {
   const result = raffle?.drawResult;
   section.hidden = !result;
   if (!result) return;
-  const labels = ["1º prêmio · Luva Pista F900", "2º prêmio · Pix R$ 300", "3º prêmio · Pix R$ 100"];
+  const labels = ["1º prêmio · Luva Pista F900", "2º prêmio · Pix R$ 300", "3º prêmio · Pix R$ 200"];
   document.querySelector("#raffle-winners").innerHTML = result.winners
     .map((winner, index) => `<article class="raffle-winner"><small>${labels[winner.place - 1] || labels[index]}</small><b>Nº ${String(winner.number).padStart(3, "0")}</b></article>`)
     .join("");
@@ -262,15 +262,11 @@ function showCheckoutForm() {
     raffle.paymentMode === "test"
       ? "Ambiente de teste: o checkout será exibido aqui mesmo e nenhum pagamento real será feito."
       : "Pix e cartão serão processados com segurança pelo Mercado Pago sem redirecionar você para outro site.";
-  checkoutContent.innerHTML = `<div class="eyebrow">RIFA BENEFICENTE · IGREJA MINISTÉRIO CATALUNHA</div><h2>Dados da participação.</h2><p>Preencha seus dados para reservar os números por 30 minutos e pagar aqui mesmo.</p><form class="checkout-form" id="participant-form"><label>Nome completo<input name="name" autocomplete="name" required minlength="3" placeholder="Como você se chama?" /></label><label>E-mail<input name="email" type="email" autocomplete="email" required placeholder="voce@email.com" /></label><label>Telefone / WhatsApp<input name="phone" type="tel" autocomplete="tel" required placeholder="(00) 00000-0000" /></label><label id="pix-identification-field">CPF para o Pix<input name="identificationNumber" type="text" inputmode="numeric" autocomplete="off" required pattern="[0-9.\\-]{11,14}" placeholder="000.000.000-00" /><small>Enviado ao Mercado Pago para processar o Pix; não é armazenado pela rifa.</small></label><label>Forma de pagamento</label><div class="method-row"><button type="button" class="method-choice active" data-method="pix">◈ &nbsp; Pix</button><button type="button" class="method-choice" data-method="card">▣ &nbsp; Cartão</button></div><p class="checkout-error" id="checkout-error"></p><button class="button button-lime" type="submit">Continuar · ${money(selected.size * raffle.price)} <span>→</span></button></form><p class="demo-banner">${checkoutNote}</p>`;
+  checkoutContent.innerHTML = `<div class="eyebrow">RIFA BENEFICENTE · IGREJA MINISTÉRIO CATALUNHA</div><h2>Dados da participação.</h2><p>Preencha seus dados para reservar os números por 30 minutos e pagar aqui mesmo.</p><form class="checkout-form" id="participant-form"><label>Nome completo<input name="name" autocomplete="name" required minlength="3" placeholder="Como você se chama?" /></label><label>E-mail<input name="email" type="email" autocomplete="email" required placeholder="voce@email.com" /></label><label>Telefone / WhatsApp<input name="phone" type="tel" autocomplete="tel" required placeholder="(00) 00000-0000" /></label><label>Forma de pagamento</label><div class="method-row"><button type="button" class="method-choice active" data-method="pix">◈ &nbsp; Pix</button><button type="button" class="method-choice" data-method="card">▣ &nbsp; Cartão</button></div><p class="checkout-error" id="checkout-error"></p><button class="button button-lime" type="submit">Continuar · ${money(selected.size * raffle.price)} <span>→</span></button></form><p class="demo-banner">${checkoutNote}</p>`;
   let method = "pix";
-  const pixIdentificationField = checkoutContent.querySelector("#pix-identification-field");
-  const identificationInput = pixIdentificationField.querySelector("input");
   checkoutContent.querySelectorAll(".method-choice").forEach((button) =>
     button.addEventListener("click", () => {
       method = button.dataset.method;
-      pixIdentificationField.hidden = method !== "pix";
-      identificationInput.required = method === "pix";
       checkoutContent
         .querySelectorAll(".method-choice")
         .forEach((choice) => choice.classList.toggle("active", choice === button));
@@ -284,15 +280,10 @@ function showCheckoutForm() {
       const numbers = [...selected];
       const error = checkoutContent.querySelector("#checkout-error");
       const submit = event.currentTarget.querySelector('[type="submit"]');
-      const identificationNumber = String(form.get("identificationNumber") || "").replace(/\D/g, "");
-      if (method === "pix" && identificationNumber.length !== 11) {
-        error.textContent = "Informe um CPF válido para gerar o Pix.";
-        return;
-      }
       submit.disabled = true;
       error.textContent = "";
       try {
-        await ensureMercadoPago();
+        if (method === "card") await ensureMercadoPago();
         const response = await fetch("/api/hold", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -308,7 +299,6 @@ function showCheckoutForm() {
         selected.clear();
         data.payerEmail = String(form.get("email") || "");
         data.method = method;
-        data.payerIdentification = method === "pix" ? { type: "CPF", number: identificationNumber } : null;
         await loadState();
         await showEmbeddedPayment(data);
       } catch (err) {
@@ -320,18 +310,34 @@ function showCheckoutForm() {
 }
 
 async function showEmbeddedPayment(hold) {
-  await ensureMercadoPago();
   await unmountPaymentBricks();
   stopPaymentTimers();
   const numberList = hold.numbers
     .map((number) => String(number).padStart(3, "0"))
     .join(", ");
+  if (hold.method === "pix") {
+    checkoutContent.innerHTML = `<div class="eyebrow">PAGAMENTO VIA PIX</div><h2>Gerando seu Pix…</h2><p>Números ${numberList} · total de <b>${money(hold.amount)}</b></p><p class="checkout-secure-note">O QR Code e o código Pix aparecerão aqui mesmo, sem repetir seus dados.</p><p class="checkout-error" id="payment-error" role="alert"></p><p id="hold-countdown" class="hold-note"></p>`;
+    startHoldCountdown(hold);
+    try {
+      const response = await fetch("/api/pix", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderId: hold.id, idempotencyKey: newPaymentAttemptId() }),
+      });
+      const payment = await response.json();
+      if (!response.ok) throw new Error(payment.error || "Não foi possível gerar o Pix.");
+      if (payment.expiresAt) hold.expiresAt = payment.expiresAt;
+      await showPaymentStatus(hold, payment);
+    } catch (error) {
+      const target = document.querySelector("#payment-error");
+      if (target) target.textContent = error.message || "Não foi possível gerar o Pix. Tente novamente.";
+    }
+    return;
+  }
+  await ensureMercadoPago();
   checkoutContent.innerHTML = `<div class="eyebrow">${hold.method === "pix" ? "PAGAMENTO VIA PIX" : "PAGAMENTO COM CARTÃO"}</div><h2>Finalize sua participação.</h2><p>Números ${numberList} · total de <b>${money(hold.amount)}</b></p><p class="checkout-secure-note">Pagamento processado com segurança pelo Mercado Pago dentro desta página.</p><div class="payment-brick-shell"><div id="paymentBrick_container"></div></div><p class="checkout-error" id="payment-error" role="alert"></p><p id="hold-countdown" class="hold-note"></p>`;
   startHoldCountdown(hold);
-  const methods =
-    hold.method === "pix"
-      ? { bankTransfer: "all" }
-      : { creditCard: "all", debitCard: "all", prepaidCard: "all" };
+  const methods = { creditCard: "all", debitCard: "all", prepaidCard: "all" };
   const settings = {
     initialization: {
       amount: Number(hold.amount),
@@ -354,7 +360,6 @@ async function showEmbeddedPayment(hold) {
               body: JSON.stringify({
                 orderId: hold.id,
                 formData,
-                payerIdentification: hold.payerIdentification,
                 idempotencyKey: newPaymentAttemptId(),
               }),
             });
@@ -365,7 +370,7 @@ async function showEmbeddedPayment(hold) {
             setTimeout(async () => {
               try {
                 if (data.status === "approved") {
-                  const confirmed = await syncOrderPayment(hold.id, data.paymentId);
+                  const confirmed = await syncOrderPayment(hold.id, data.paymentId, data.providerOrderId);
                   if (confirmed) return;
                 }
                 await showPaymentStatus(hold, data);
@@ -399,8 +404,12 @@ async function showEmbeddedPayment(hold) {
   }
 }
 
-async function syncOrderPayment(orderId, paymentId) {
-  const query = paymentId ? `?payment_id=${encodeURIComponent(paymentId)}` : "";
+async function syncOrderPayment(orderId, paymentId, providerOrderId) {
+  const query = providerOrderId
+    ? `?order_id=${encodeURIComponent(providerOrderId)}`
+    : paymentId
+      ? `?payment_id=${encodeURIComponent(paymentId)}`
+      : "";
   const response = await fetch(`/api/order-status/${encodeURIComponent(orderId)}${query}`, {
     cache: "no-store",
   });
@@ -450,7 +459,7 @@ async function showPaymentStatus(hold, payment) {
   const statusTarget = document.querySelector("#statusScreenBrick_container");
   if (payment.pix && renderPixFallback(statusTarget, payment.pix)) {
     document.querySelector("#status-error").textContent = "Aguardando a confirmação do Pix pelo banco.";
-    startPaymentPolling(hold, payment.paymentId);
+    startPaymentPolling(hold, payment.paymentId, payment.providerOrderId);
     return;
   }
   const settings = {
@@ -496,18 +505,18 @@ async function showPaymentStatus(hold, payment) {
       showEmbeddedPayment(hold).catch((error) => notify(error.message)),
     );
   } else {
-    startPaymentPolling(hold, payment.paymentId);
+    startPaymentPolling(hold, payment.paymentId, payment.providerOrderId);
   }
 }
 
-function startPaymentPolling(hold, paymentId) {
+function startPaymentPolling(hold, paymentId, providerOrderId) {
   if (paymentPollTimer) clearInterval(paymentPollTimer);
   let busy = false;
   const poll = async () => {
     if (busy || !dialog.open) return;
     busy = true;
     try {
-      const done = await syncOrderPayment(hold.id, paymentId);
+      const done = await syncOrderPayment(hold.id, paymentId, providerOrderId);
       if (done && paymentPollTimer) {
         clearInterval(paymentPollTimer);
         paymentPollTimer = null;

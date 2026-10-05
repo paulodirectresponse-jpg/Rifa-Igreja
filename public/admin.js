@@ -62,7 +62,7 @@ async function renderDashboard() {
     ? data.drawResult.winners
         .map(
           (winner) =>
-            `<article class="draw-winner-card"><small>${["1º prêmio · Luva Pista F900 tamanho 10", "2º prêmio · Pix de R$ 300", "3º prêmio · Pix de R$ 100"][winner.place - 1]}</small><b>Nº ${String(winner.number).padStart(3, "0")}</b></article>`,
+            `<article class="draw-winner-card"><small>${["1º prêmio · Luva Pista F900 tamanho 10", "2º prêmio · Pix de R$ 300", "3º prêmio · Pix de R$ 200"][winner.place - 1]}</small><b>Nº ${String(winner.number).padStart(3, "0")}</b></article>`,
         )
         .join("")
     : "";

@@ -1745,7 +1745,7 @@ tbody tr:last-child td {
   margin: 1px 0 2px;
   filter: drop-shadow(0 8px 9px rgba(39, 47, 32, 0.18));
 }
-.cash-100 {
+.cash-200 {
   width: min(90%, 116px);
   height: 96px;
   animation-delay: 0.6s;
@@ -1854,7 +1854,7 @@ tbody tr:last-child td {
     height: 90px;
     margin: 1px 0 0;
   }
-  .cash-100 {
+  .cash-200 {
     width: min(90%, 88px);
     height: 82px;
   }
@@ -2697,7 +2697,7 @@ tbody tr:last-child td {
 .prize-rank span { font-size: 7px; letter-spacing: 0.35px; }
 .prize-art { display: block; flex: 0 0 auto; object-fit: contain; animation: prize-breathe 3.8s ease-in-out infinite; transform-origin: center 72%; will-change: transform; }
 .cash-art { width: min(100%, 132px); height: 104px; margin: 1px 0 2px; filter: drop-shadow(0 8px 9px rgba(39,47,32,.18)); }
-.cash-100 { width: min(90%, 116px); height: 96px; animation-delay: .6s; }
+.cash-200 { width: min(90%, 116px); height: 96px; animation-delay: .6s; }
 .glove-art { width: min(100%, 150px); height: 139px; margin: -2px 0 -2px; filter: drop-shadow(0 9px 10px rgba(34,46,29,.2)); animation-delay: .3s; }
 .prize-content { display: block; position: relative; z-index: 1; }
 .prize-content h3, .pix-copy h3, .center-prize .prize-content h3, .side-prize .pix-copy h3 { margin: 0; font: 800 24px/1.08 var(--display); letter-spacing: -.7px; }
@@ -2721,7 +2721,7 @@ tbody tr:last-child td {
   .prize-card .prize-rank { min-height: 11px; font-size: 7px; letter-spacing: .35px; }
   .prize-rank span { display: none; }
   .cash-art { width: min(100%, 100px); height: 90px; margin: 1px 0 0; }
-  .cash-100 { width: min(90%, 88px); height: 82px; }
+  .cash-200 { width: min(90%, 88px); height: 82px; }
   .glove-art { width: min(100%, 126px); height: 127px; margin: -2px 0 -1px; }
   .pix-copy h3, .side-prize .pix-copy h3 { font-size: clamp(17px, 5.2vw, 21px); }
   .prize-content h3, .center-prize .prize-content h3 { font-size: clamp(11px, 3.4vw, 14px); line-height: 1.12; }
