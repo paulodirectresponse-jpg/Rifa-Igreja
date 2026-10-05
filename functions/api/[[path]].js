@@ -349,7 +349,6 @@ async function api(request, env) {
       processing_mode: "automatic",
       transactions: { payments: [{ amount: Number(order.amount).toFixed(2), payment_method: { id: "pix", type: "bank_transfer" }, expiration_time: "PT30M" }] },
       payer: { email: order.email, ...(parts[0] ? { first_name: parts[0] } : {}), ...(parts.length > 1 ? { last_name: parts.slice(1).join(" ") } : {}) },
-      ...(env.MERCADOPAGO_WEBHOOK_SECRET ? { notification_url: `${baseUrl(env, request)}/api/webhooks/mercadopago` } : {}),
     };
     try {
       const response = await fetch("https://api.mercadopago.com/v1/orders", {
