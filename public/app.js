@@ -427,7 +427,7 @@ async function syncOrderPayment(orderId, paymentId) {
 
 function renderPixFallback(container, pix) {
   if (!pix?.qrCodeBase64 && !pix?.qrCode) return false;
-  container.innerHTML = `<div class="pix-fallback"><h3>Pague com Pix</h3>${pix.qrCodeBase64 ? `<img class="pix-qr" src="data:image/png;base64,${escapeHTML(pix.qrCodeBase64)}" alt="QR Code Pix" />` : ""}<p>Escaneie o QR Code no aplicativo do seu banco ou use o código Pix abaixo.</p>${pix.qrCode ? `<textarea class="pix-copy-code" readonly>${escapeHTML(pix.qrCode)}</textarea><button type="button" class="button button-lime" id="copy-pix-code">Copiar código Pix</button>` : ""}</div>`;
+  container.innerHTML = `<div class="pix-fallback">${pix.qrCodeBase64 ? `<img class="pix-qr" src="data:image/png;base64,${escapeHTML(pix.qrCodeBase64)}" alt="QR Code Pix" />` : ""}<p>Escaneie o QR Code no aplicativo do seu banco ou use o código Pix abaixo.</p>${pix.qrCode ? `<textarea class="pix-copy-code" readonly>${escapeHTML(pix.qrCode)}</textarea><button type="button" class="button button-lime" id="copy-pix-code">Copiar código Pix</button>` : ""}</div>`;
   document.querySelector("#copy-pix-code")?.addEventListener("click", async (event) => {
     try {
       await navigator.clipboard.writeText(pix.qrCode);
@@ -445,9 +445,14 @@ async function showPaymentStatus(hold, payment) {
   const numberList = hold.numbers
     .map((number) => String(number).padStart(3, "0"))
     .join(", ");
-  checkoutContent.innerHTML = `<div class="eyebrow">STATUS DO PAGAMENTO</div><h2>${payment.status === "rejected" ? "Pagamento não aprovado." : payment.status === "approved" ? "Pagamento recebido." : "Conclua seu pagamento."}</h2><p>Números ${numberList} · total de <b>${money(hold.amount)}</b></p><div class="payment-brick-shell"><div id="statusScreenBrick_container"></div></div><p class="checkout-error" id="status-error" role="alert"></p><div id="status-actions"></div><p id="hold-countdown" class="hold-note"></p>`;
+  checkoutContent.innerHTML = `<div class="eyebrow">${payment.pix ? "PAGAMENTO VIA PIX" : "STATUS DO PAGAMENTO"}</div><h2>${payment.status === "rejected" ? "Pagamento não aprovado." : payment.status === "approved" ? "Pagamento recebido." : payment.pix ? "Pague com Pix" : "Conclua seu pagamento."}</h2><p>Números ${numberList} · total de <b>${money(hold.amount)}</b></p><div class="payment-brick-shell"><div id="statusScreenBrick_container"></div></div><p class="checkout-error" id="status-error" role="alert"></p><div id="status-actions"></div><p id="hold-countdown" class="hold-note"></p>`;
   startHoldCountdown(hold);
   const statusTarget = document.querySelector("#statusScreenBrick_container");
+  if (payment.pix && renderPixFallback(statusTarget, payment.pix)) {
+    document.querySelector("#status-error").textContent = "Aguardando a confirmação do Pix pelo banco.";
+    startPaymentPolling(hold, payment.paymentId);
+    return;
+  }
   const settings = {
     initialization: {
       paymentId: String(payment.paymentId),

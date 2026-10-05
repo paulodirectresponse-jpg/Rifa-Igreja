@@ -136,7 +136,14 @@ async function createMercadoPagoPayment(env, request, order, formData, payerIden
   });
   const payment = await response.json();
   if (!response.ok || !payment.id) {
-    console.error("Mercado Pago payment error", response.status, payment?.error || payment?.message || "unknown");
+    console.error("Mercado Pago payment error", JSON.stringify({
+      httpStatus: response.status,
+      error: payment?.error || null,
+      message: payment?.message || null,
+      causes: Array.isArray(payment?.cause)
+        ? payment.cause.map((cause) => ({ code: cause?.code || null, description: cause?.description || null }))
+        : [],
+    }));
     throw new Error("Mercado Pago não criou o pagamento");
   }
   if (payment.status !== "rejected") {
