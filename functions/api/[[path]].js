@@ -220,6 +220,11 @@ function base64(value) {
   return btoa(binary);
 }
 
+function safeProviderErrorBody(value) {
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  return String(text || "").replace(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/g, "[email]").replace(/\+?\d[\d\s().-]{7,}\d/g, "[number]").slice(0, 2000);
+}
+
 async function sendWithGmail(env, { to, subject, html }) {
   const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
@@ -352,9 +357,16 @@ async function api(request, env) {
         headers: { authorization: `Bearer ${env.MERCADOPAGO_ACCESS_TOKEN}`, "content-type": "application/json", "x-idempotency-key": order.id },
         body: JSON.stringify(payload),
       });
-      const mpOrder = await response.json();
+      const responseText = await response.text();
+      let mpOrder;
+      try { mpOrder = JSON.parse(responseText); } catch { mpOrder = null; }
       if (!response.ok || !mpOrder.id) {
-        console.error("Mercado Pago Pix order error", JSON.stringify({ httpStatus: response.status, error: mpOrder?.error || null, message: mpOrder?.message || null, causes: Array.isArray(mpOrder?.cause) ? mpOrder.cause.map((cause) => ({ code: cause?.code || null, description: cause?.description || null })) : [] }));
+        console.error("Mercado Pago Pix order error", JSON.stringify({
+          httpStatus: response.status,
+          requestId: response.headers.get("x-request-id") || response.headers.get("x-correlation-id") || null,
+          contentType: response.headers.get("content-type") || null,
+          response: safeProviderErrorBody(mpOrder ?? responseText),
+        }));
         throw new Error("Mercado Pago não criou o Pix");
       }
       const payment = normalizedOrderPayment(mpOrder);
