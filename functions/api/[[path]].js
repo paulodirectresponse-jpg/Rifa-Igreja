@@ -203,12 +203,68 @@ async function settle(db, order, payment, salesClosed) {
   ]);
 }
 
+const receiptEmailConfigured = (env) => Boolean(
+  env.RECEIPT_EMAIL_FROM && (
+    env.RESEND_API_KEY ||
+    (env.GMAIL_CLIENT_ID && env.GMAIL_CLIENT_SECRET && env.GMAIL_REFRESH_TOKEN)
+  ),
+);
+
+function base64(value) {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return btoa(binary);
+}
+
+async function sendWithGmail(env, { to, subject, html }) {
+  const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: env.GMAIL_CLIENT_ID,
+      client_secret: env.GMAIL_CLIENT_SECRET,
+      refresh_token: env.GMAIL_REFRESH_TOKEN,
+      grant_type: "refresh_token",
+    }),
+  });
+  if (!tokenResponse.ok) throw new Error("Falha ao autenticar o Gmail para envio do comprovante.");
+  const { access_token: accessToken } = await tokenResponse.json();
+  const encodedSubject = base64(subject);
+  const mime = [
+    `From: ${env.RECEIPT_EMAIL_FROM}`,
+    `To: ${to}`,
+    `Subject: =?UTF-8?B?${encodedSubject}?=`,
+    "MIME-Version: 1.0",
+    "Content-Type: text/html; charset=UTF-8",
+    "Content-Transfer-Encoding: base64",
+    "",
+    base64(html),
+  ].join("\r\n");
+  const raw = base64(mime).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const response = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+    method: "POST",
+    headers: { authorization: `Bearer ${accessToken}`, "content-type": "application/json" },
+    body: JSON.stringify({ raw }),
+  });
+  if (!response.ok) throw new Error("O Gmail não aceitou o envio do comprovante.");
+}
+
 async function sendReceiptEmail(env, request, order) {
-  if (!env.RESEND_API_KEY || !env.RECEIPT_EMAIL_FROM || order.receipt_email_sent_at) return;
+  if (!receiptEmailConfigured(env) || order.receipt_email_sent_at) return;
   const nums = order.numbers.map((n) => String(n).padStart(3, "0")).join(", ");
   const escape = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-  const response = await fetch("https://api.resend.com/emails", { method: "POST", headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, "content-type": "application/json" }, body: JSON.stringify({ from: env.RECEIPT_EMAIL_FROM, to: [order.email], subject: "Comprovante da rifa beneficente · Igreja Ministério Catalunha", html: `<p>Olá, ${escape(order.name)}. Seu pagamento foi confirmado.</p><p><b>Números:</b> ${nums}<br><b>Total:</b> ${money(order.amount)}</p><p><a href="${publicReceiptLink(env, request, order.id)}">Abrir comprovante seguro</a></p>` }) });
-  if (response.ok) await env.DB.prepare("UPDATE raffle_orders SET receipt_email_sent_at=? WHERE id=?").bind(Date.now(), order.id).run();
+  const subject = "Comprovante da rifa beneficente · Igreja Ministério Catalunha";
+  const html = `<p>Olá, ${escape(order.name)}. Seu pagamento foi confirmado.</p><p><b>Números:</b> ${nums}<br><b>Total:</b> ${money(order.amount)}</p><p><a href="${publicReceiptLink(env, request, order.id)}">Abrir comprovante seguro</a></p>`;
+  if (env.RESEND_API_KEY) {
+    const response = await fetch("https://api.resend.com/emails", { method: "POST", headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, "content-type": "application/json" }, body: JSON.stringify({ from: env.RECEIPT_EMAIL_FROM, to: [order.email], subject, html }) });
+    if (!response.ok) throw new Error("O provedor de e-mail não aceitou o comprovante.");
+  } else {
+    await sendWithGmail(env, { to: order.email, subject, html });
+  }
+  await env.DB.prepare("UPDATE raffle_orders SET receipt_email_sent_at=? WHERE id=?").bind(Date.now(), order.id).run();
 }
 
 async function adminOk(request, env) {
@@ -387,7 +443,7 @@ async function api(request, env) {
     const recent = await env.DB.prepare("SELECT COUNT(*) AS count FROM receipt_requests WHERE request_key=? AND requested_at>?").bind(key, now - 15 * 60_000).first();
     if (recent.count >= 3) return json({ error: "Aguarde alguns minutos antes de pedir outro link." }, 429);
     await env.DB.prepare("INSERT INTO receipt_requests(request_key,requested_at) VALUES(?,?)").bind(key, now).run();
-    const emailConfigured = Boolean(env.RESEND_API_KEY && env.RECEIPT_EMAIL_FROM);
+    const emailConfigured = receiptEmailConfigured(env);
     if (emailConfigured) {
       const rows = await env.DB.prepare("SELECT * FROM raffle_orders WHERE lower(email)=? AND status IN ('paid','paid_demo')").bind(normalized).all();
       for (const row of rows.results) await sendReceiptEmail(env, request, { ...row, numbers: JSON.parse(row.numbers_json) }).catch(() => {});
@@ -445,7 +501,7 @@ async function api(request, env) {
   if (request.method === "GET" && url.pathname === "/api/admin/overview") {
     const [cfg, counts, orders] = await Promise.all([settings(), env.DB.prepare("SELECT status,COUNT(*) AS count FROM raffle_numbers GROUP BY status").all(), env.DB.prepare("SELECT id,name,email,phone,numbers_json,amount,status,expires_at FROM raffle_orders ORDER BY created_at DESC LIMIT 40").all()]);
     const count = Object.fromEntries(counts.results.map((row) => [row.status, row.count])); const paid = await env.DB.prepare("SELECT COUNT(*) AS count FROM raffle_orders WHERE status IN ('paid','paid_demo')").first(); const pending = await env.DB.prepare("SELECT COUNT(*) AS count FROM raffle_orders WHERE status='pending' AND expires_at>?").bind(now).first();
-    return json({ total: 250, sold: count.sold || 0, reserved: count.reserved || 0, available: count.available || 0, gross: (count.sold || 0) * 20, paymentMode: checkoutConfigured(env) ? "mercadopago" : "unavailable", testMode: env.MERCADOPAGO_TEST_MODE === "true", emailConfigured: Boolean(env.RESEND_API_KEY && env.RECEIPT_EMAIL_FROM), paidNumberCount: count.sold || 0, salesClosed: Boolean(cfg.sales_closed), drawResult: cfg.draw_result ? JSON.parse(cfg.draw_result) : null, orders: orders.results.map((o) => ({ id: o.id.slice(0, 8), name: o.name, email: o.email, phone: o.phone, numbers: JSON.parse(o.numbers_json), amount: o.amount, status: o.status, expiresAt: o.expires_at })), paidCount: paid.count, pendingCount: pending.count });
+    return json({ total: 250, sold: count.sold || 0, reserved: count.reserved || 0, available: count.available || 0, gross: (count.sold || 0) * 20, paymentMode: checkoutConfigured(env) ? "mercadopago" : "unavailable", testMode: env.MERCADOPAGO_TEST_MODE === "true", emailConfigured: receiptEmailConfigured(env), paidNumberCount: count.sold || 0, salesClosed: Boolean(cfg.sales_closed), drawResult: cfg.draw_result ? JSON.parse(cfg.draw_result) : null, orders: orders.results.map((o) => ({ id: o.id.slice(0, 8), name: o.name, email: o.email, phone: o.phone, numbers: JSON.parse(o.numbers_json), amount: o.amount, status: o.status, expiresAt: o.expires_at })), paidCount: paid.count, pendingCount: pending.count });
   }
   return json({ error: "Rota da API não encontrada." }, 404);
 }

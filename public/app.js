@@ -160,7 +160,7 @@ document
       if (!response.ok) throw new Error(data.error || "Tente novamente em alguns minutos.");
       message.textContent = data.emailConfigured
         ? data.message
-        : "O envio de e-mail ainda não está configurado nesta prévia. Após a simulação, salve o link privado exibido no comprovante.";
+        : "O envio de e-mail ainda não está configurado. Guarde o link privado exibido no comprovante após a confirmação do pagamento.";
     } catch (error) {
       message.textContent = error.message || "Não foi possível solicitar o link agora.";
     } finally {

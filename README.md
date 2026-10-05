@@ -1,6 +1,6 @@
 # Rifa beneficente · Igreja Evangelística Ministério Catalunha
 
-Site responsivo para arrecadar recursos para a compra da bateria da igreja. São 200 números a R$ 20 cada e três prêmios: luva profissional Pista F900 tamanho 10, Pix de R$ 300 e Pix de R$ 100.
+Site responsivo para arrecadar recursos para a compra da bateria da igreja. São 250 números a R$ 20 cada e três prêmios: luva profissional Pista F900 tamanho 10, Pix de R$ 300 e Pix de R$ 200.
 
 ## Desenvolvimento local
 
@@ -27,7 +27,7 @@ O primeiro commit na `main` cria o deploy inicial; commits posteriores nessa bra
 ### Banco D1
 
 1. Crie um banco D1 chamado `rifa-igreja`.
-2. No console SQL do banco, execute o conteúdo de `migrations/0001_initial.sql` uma vez. Isso cria o estado inicial com os 200 números disponíveis.
+2. No console SQL do banco, execute `migrations/0001_initial.sql` uma vez e depois `migrations/0002_expand_raffle_to_250.sql` para expandir a rifa a 250 números.
 3. No projeto Pages, abra **Settings → Functions → D1 database bindings** e adicione o binding `DB`, apontando para esse banco.
 4. Faça um novo deploy para ativar o binding na versão publicada.
 
@@ -50,7 +50,9 @@ O webhook enviado ao Mercado Pago é `https://rifa-igreja.pages.dev/api/webhooks
 
 Após salvar os valores, faça um novo deploy. Enquanto Access Token, Public Key, URL HTTPS e configuração do modo de pagamento não estiverem válidos, a API não reserva números. Em produção, o webhook continua sendo a fonte de verdade da confirmação.
 
-Opcionalmente, configure `RESEND_API_KEY` e `RECEIPT_EMAIL_FROM` para envio de links de comprovante por e-mail.
+Para enviar comprovantes pelo Gmail, habilite a Gmail API em um projeto Google Cloud, crie um cliente OAuth, autorize a conta remetente com o escopo `https://www.googleapis.com/auth/gmail.send` e obtenha um refresh token para acesso offline. No Cloudflare Production, adicione `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` e `GMAIL_REFRESH_TOKEN` como Secrets, e `RECEIPT_EMAIL_FROM` como o endereço Gmail autorizado. Nunca coloque esses valores no repositório. Um consentimento OAuth em modo de teste expira após sete dias; para uso contínuo, configure o app OAuth em produção e conclua a verificação exigida pelo Google para o escopo de envio.
+
+Como alternativa, configure `RESEND_API_KEY` e `RECEIPT_EMAIL_FROM` para usar Resend. Se os Secrets de e-mail não estiverem completos, a consulta não envia mensagens.
 
 ## Funcionalidades
 
